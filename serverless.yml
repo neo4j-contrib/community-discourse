@@ -22,11 +22,16 @@ plugins:
   - serverless-python-requirements
 
 functions:
+  community-content:
+      name: Discourse-CommunityContentWebHook
+      handler: handler.community_content
+      events:
+        - http: POST CommunityContent
   user-events:
       name: Discourse-UserEventsWebHook
       handler: handler.user_events
       events:
-        - http: POST DiscourseEvents
+        - http: POST UserEvents
 
 package:
   exclude:
