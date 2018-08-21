@@ -1,10 +1,11 @@
 import json
 import os
-
+import re
 import requests
+
+from bs4 import BeautifulSoup
 from neo4j.v1 import GraphDatabase
 from requests_toolbelt import MultipartEncoder
-
 from util.encryption import decrypt_value_str
 
 host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
@@ -100,6 +101,63 @@ def user_events(request, context):
 
     with db_driver.session() as session:
         result = session.run(user_events_query, {"params": json_payload})
+        print(result.summary().counters)
+
+    return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
+
+import_twin4j_query = """\
+    MERGE (twin4j:TWIN4j {date: datetime($date) })
+    SET twin4j.image = $image, twin4j.summaryText = $summaryText
+    WITH twin4j
+    UNWIND $people AS person
+    OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
+    OPTIONAL MATCH (user:User) where user.id = toInteger(person.stackOverflowId)
+    WITH coalesce(twitter, user) AS u, twin4j
+    
+    CALL apoc.do.when(u is NOT NULL, 'MERGE (twin4j)-[:FEATURED]->(u)', '', {twin4j: twin4j, u: u}) YIELD value
+    RETURN value
+    """
+
+
+def import_twin4j(request, context):
+    twin4j_posts = requests.get("https://neo4j.com/wp-json/wp/v2/posts?tags=3201").json()
+
+    most_recent_post = twin4j_posts[0]
+
+    date = most_recent_post["date"]
+
+    html_content = most_recent_post["content"]["rendered"]
+
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    featured_element = [tag for tag in soup.findAll("h3") if "Featured Community Member" in tag.text][0]
+    match = re.match("Featured Community Members?: (.*)", featured_element.text)
+
+    person = match.groups(1)[0].strip()
+    people = [p.strip() for p in person.split(" and ")]
+
+    if len(people) == 1:
+        link_element = featured_element.find_all_next("a")[:1]
+    else:
+        link_element = featured_element.find_all_next("a")[:2]
+
+    image = featured_element.parent.find_all("img")[0]["src"]
+
+    print("Featured Community Member: ", [(link.text, link["href"]) for link in link_element])
+    summary_text = soup.find_all("div")[2].text.strip()
+
+    params = {"people": [{"name": link.text,
+                          "screenName": link["href"].split("/")[-1],
+                          "stackOverflowId": link["href"].split("/")[-2] if "stackoverflow" in link["href"] else -1
+                          }
+                         for link in link_element],
+              "date": date,
+              "image": image,
+              "summaryText": summary_text }
+
+    with db_driver.session() as session:
+        result = session.run(import_twin4j_query, params)
         print(result.summary().counters)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}

@@ -32,6 +32,9 @@ functions:
       handler: handler.user_events
       events:
         - http: POST UserEvents
+  import-twin4j:
+      name: Discource-ImportTWIN4j
+      handler: handler.import_twin4j
 
 package:
   exclude:
