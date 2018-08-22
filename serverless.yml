@@ -33,8 +33,13 @@ functions:
       events:
         - http: POST UserEvents
   import-twin4j:
-      name: Discource-ImportTWIN4j
+      name: Discourse-ImportTWIN4j
       handler: handler.import_twin4j
+  update-profile:
+      name: Discourse-UpdateProfileWebHook
+      handler: handler.update_profile
+      events:
+        - http: POST UpdateProfile
 
 package:
   exclude:

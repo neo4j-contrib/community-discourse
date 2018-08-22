@@ -6,13 +6,16 @@ import requests
 from bs4 import BeautifulSoup
 from neo4j.v1 import GraphDatabase
 from requests_toolbelt import MultipartEncoder
-from util.encryption import decrypt_value_str
+from util.encryption import decrypt_value_str, encrypt_value
 
 host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
 user = decrypt_value_str(os.environ['GRAPHACADEMY_DB_USER'])
 password = decrypt_value_str(os.environ['GRAPHACADEMY_DB_PW'])
 
 db_driver = GraphDatabase.driver(f"bolt://{host_port}", auth=(user, password), max_retry_time=15)
+
+discourse_api_key = decrypt_value_str(os.environ['DISCOURSE_API_KEY'])
+discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
 
 community_content_query = """\
 MERGE (user:DiscourseUser {id: $params.topic.user_id })
@@ -35,7 +38,6 @@ def community_content(request, context):
 
     event_type = headers["X-Discourse-Event-Type"]
     event = headers["X-Discourse-Event"]
-
     print(f"Received {event_type}: {event}")
 
     body = request["body"]
@@ -63,7 +65,9 @@ SET discourse.name = $params.user.username,
     discourse.avatarTemplate = $params.user.avatar_template,
     discourse.screenName = $params.user.name
 WITH discourse
-OPTIONAL MATCH (user:User {auth0_key: $params.user.external_id})
+
+MERGE (user:User {auth0_key: $params.user.external_id})
+ON CREATE SET user.email = $params.user.email
 MERGE (user)-[:DISCOURSE_ACCOUNT]->(discourse)
 
 WITH user
@@ -80,8 +84,8 @@ FOREACH (_ IN CASE github WHEN null THEN [] ELSE [1] END |
 
 
 WITH user
-so
-OPTIONAL MATCH (:StackOverflow {id: toInteger($params.user.user_fields.`5`)})
+
+OPTIONAL MATCH (so:StackOverflow {id: toInteger($params.user.user_fields.`5`)})
 FOREACH (_ IN CASE so WHEN null THEN [] ELSE [1] END |
    MERGE (user)-[:STACKOVERFLOW_ACCOUNT]->(so))
 """
@@ -89,11 +93,13 @@ FOREACH (_ IN CASE so WHEN null THEN [] ELSE [1] END |
 
 def user_events(request, context):
     headers = request["headers"]
-
     event_type = headers["X-Discourse-Event-Type"]
     event = headers["X-Discourse-Event"]
-
     print(f"Received {event_type}: {event}")
+
+    if event == "user" and event_type == "user_created":
+        print("User created so we'll update everything when they login")
+        return
 
     body = request["body"]
     json_payload = json.loads(body)
@@ -163,3 +169,33 @@ def import_twin4j(request, context):
         print(result.summary().counters)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
+
+def update_profile(request, context):
+    headers = request["headers"]
+    event_type = headers["X-Discourse-Event-Type"]
+    event = headers["X-Discourse-Event"]
+    print(f"Received {event_type}: {event}")
+
+    body = request["body"]
+    json_payload = json.loads(body)
+    print(json_payload)
+
+    if event_type == "post" and event in ["post_edited", "post_created"]:
+        post = json_payload["post"]
+        username = post["username"]
+        bio = post["cooked"]
+
+        uri = f"https://community.neo4j.com/users/{username}.json"
+
+        payload = {
+            "api_key": discourse_api_key,
+            "api_user_name": discourse_api_user,
+            "bio_raw": bio,
+        }
+
+        m = MultipartEncoder(fields=payload)
+        r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+        print(r)
+
+        return {"statusCode": 200, "body": "Got the event", "headers": {}}
