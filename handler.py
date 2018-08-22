@@ -108,7 +108,7 @@ def user_events(request, context):
 
 import_twin4j_query = """\
     MERGE (twin4j:TWIN4j {date: datetime($date) })
-    SET twin4j.image = $image, twin4j.summaryText = $summaryText
+    SET twin4j.image = $image, twin4j.summaryText = $summaryText, twin4j.link = $link
     WITH twin4j
     UNWIND $people AS person
     OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
@@ -126,6 +126,7 @@ def import_twin4j(request, context):
     most_recent_post = twin4j_posts[0]
 
     date = most_recent_post["date"]
+    link = most_recent_post["link"]
 
     html_content = most_recent_post["content"]["rendered"]
 
@@ -154,7 +155,8 @@ def import_twin4j(request, context):
                          for link in link_element],
               "date": date,
               "image": image,
-              "summaryText": summary_text }
+              "summaryText": summary_text,
+              "link": link}
 
     with db_driver.session() as session:
         result = session.run(import_twin4j_query, params)
