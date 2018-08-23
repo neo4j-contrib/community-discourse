@@ -32,6 +32,12 @@ SET topic.title = $params.topic.title,
 MERGE (user)-[:POSTED_CONTENT]->(topic)
 """
 
+kudos_message = """
+Thanks for submitting!
+ 
+I’ve added a tag that allows your blog to be displayed on the community home page!
+"""
+
 
 def community_content(request, context):
     headers = request["headers"]
@@ -54,6 +60,20 @@ def community_content(request, context):
     with db_driver.session() as session:
         result = session.run(community_content_query, {"params": json_payload})
         print(result.summary().counters)
+
+    if len(kudos_tags) > 0:
+        uri = f"https://community.neo4j.com/posts.json"
+
+        payload = {
+            "api_key": discourse_api_key,
+            "api_user_name": discourse_api_user,
+            "topic_id": str(json_payload["topic"]["id"]),
+            "raw": kudos_message
+        }
+
+        m = MultipartEncoder(fields=payload)
+        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+        print(r)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
@@ -115,6 +135,12 @@ def user_events(request, context):
 import_twin4j_query = """\
     MERGE (twin4j:TWIN4j {date: datetime($date) })
     SET twin4j.image = $image, twin4j.summaryText = $summaryText, twin4j.link = $link
+    
+    FOREACH(tag IN $allTheTags |
+      MERGE (t:TWIN4jTag {tag: tag.tag, anchor: tag.anchor })
+      MERGE (twin4j)-[:CONTAINS_TAG]->(t)
+    )
+    
     WITH twin4j
     UNWIND $people AS person
     OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
@@ -154,6 +180,10 @@ def import_twin4j(request, context):
     print("Featured Community Member: ", [(link.text, link["href"]) for link in link_element])
     summary_text = soup.find_all("div")[2].text.strip()
 
+    all_the_tags = [{"tag": tag.text, "anchor": tag["id"]}
+                    for tag in soup.findAll("h3")
+                    if "Featured Community Member" not in tag.text]
+
     params = {"people": [{"name": link.text,
                           "screenName": link["href"].split("/")[-1],
                           "stackOverflowId": link["href"].split("/")[-2] if "stackoverflow" in link["href"] else -1
@@ -162,7 +192,10 @@ def import_twin4j(request, context):
               "date": date,
               "image": image,
               "summaryText": summary_text,
-              "link": link}
+              "link": link,
+              "allTheTags": all_the_tags}
+
+    print(params)
 
     with db_driver.session() as session:
         result = session.run(import_twin4j_query, params)
