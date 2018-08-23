@@ -27,9 +27,17 @@ SET topic.title = $params.topic.title,
     topic.createdAt = datetime($params.topic.created_at),
     topic.slug = $params.topic.slug,
     topic.approved = $params.approved,
-    topic.rating = $params.rating
+    topic.rating = $params.rating,
+    topic.likeCount = toInteger($params.topic.like_count),
+    topic.views = toInteger($params.topic.views),
+    topic.replyCount = toInteger($params.topic.replyCount)
 
 MERGE (user)-[:POSTED_CONTENT]->(topic)
+"""
+
+community_content_active_query = """\
+MATCH (topic:DiscourseTopic {id: $params.topic.id })
+RETURN topic
 """
 
 kudos_message = """
@@ -50,6 +58,10 @@ def community_content(request, context):
     json_payload = json.loads(body)
     print(json_payload)
 
+    with db_driver.session() as session:
+        result = session.run(community_content_active_query, {"params": json_payload})
+        content_already_approved = result.peek()["topic"]["approved"]
+
     tags = json_payload["topic"]["tags"]
     kudos_tags = [tag for tag in tags if tag.startswith("kudos")]
 
@@ -61,7 +73,7 @@ def community_content(request, context):
         result = session.run(community_content_query, {"params": json_payload})
         print(result.summary().counters)
 
-    if len(kudos_tags) > 0:
+    if len(kudos_tags) > 0 and not content_already_approved:
         uri = f"https://community.neo4j.com/posts.json"
 
         payload = {
