@@ -244,3 +244,27 @@ def update_profile(request, context):
         print(r)
 
         return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
+
+update_topics_query = """\
+UNWIND $params AS t
+MATCH (topic:DiscourseTopic {id: t.id })
+SET topic.likeCount = toInteger(t.like_count),
+    topic.views = toInteger(t.views),
+    topic.replyCount = toInteger(t.replyCount)
+"""
+
+
+def update_topics(request, context):
+    uri = "https://community.neo4j.com/c/68.json"
+
+    r = requests.get(uri)
+    json_payload = r.json()
+
+    topics = [topic for topic in json_payload["topic_list"]["topics"]
+              if not topic["pinned"]]
+    print(topics)
+
+    with db_driver.session() as session:
+        result = session.run(update_topics_query, {"params": topics})
+        print(result.summary().counters)
