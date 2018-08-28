@@ -130,7 +130,7 @@ def user_events(request, context):
     event = headers["X-Discourse-Event"]
     print(f"Received {event_type}: {event}")
 
-    if event == "user" and event_type == "user_created":
+    if event_type == "user" and event == "user_created":
         print("User created so we'll update everything when they login")
         return
 
