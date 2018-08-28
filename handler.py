@@ -227,7 +227,8 @@ def update_profile(request, context):
     json_payload = json.loads(body)
     print(json_payload)
 
-    if event_type == "post" and event in ["post_edited", "post_created"]:
+    post_payload = json_payload.get("post")
+    if event_type == "post" and event in ["post_edited", "post_created"] and post_payload and post_payload.get("post_number") == 1:
         post = json_payload["post"]
         username = post["username"]
         bio = post["cooked"]
