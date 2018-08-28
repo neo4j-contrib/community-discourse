@@ -36,7 +36,7 @@ functions:
       name: Discourse-ImportTWIN4j
       handler: handler.import_twin4j
       events:
-        - schedule: cron(0 9 ? * 6 *)
+        - schedule: cron(0 9 ? * 7 *)
   update-profile:
       name: Discourse-UpdateProfileWebHook
       handler: handler.update_profile

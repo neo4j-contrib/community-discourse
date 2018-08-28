@@ -36,7 +36,7 @@ MERGE (user)-[:POSTED_CONTENT]->(topic)
 """
 
 community_content_active_query = """\
-MATCH (topic:DiscourseTopic {id: $params.topic.id })
+OPTIONAL MATCH (topic:DiscourseTopic {id: $params.topic.id })
 RETURN topic
 """
 
@@ -60,7 +60,8 @@ def community_content(request, context):
 
     with db_driver.session() as session:
         result = session.run(community_content_active_query, {"params": json_payload})
-        content_already_approved = result.peek()["topic"]["approved"]
+        row = result.peek()
+        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
 
     tags = json_payload["topic"]["tags"]
     kudos_tags = [tag for tag in tags if tag.startswith("kudos")]
