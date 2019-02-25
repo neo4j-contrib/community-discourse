@@ -1,0 +1,31 @@
+{
+  "name": "community-discourse",
+  "version": "0.0.1",
+  "description": "Lambdas for deploying stuff around the community forum",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "./bin/community-graph"
+  },
+  "bin": {
+    "community-graph": "./bin/community-graph"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neo4j-contrib/community-discourse.git"
+  },
+  "keywords": [
+    "Community Graph",
+    "Neo4j"
+  ],
+  "author": "Mark Needham",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/neo4j-contrib/community-discourse/issues"
+  },
+  "homepage": "https://github.com/neo4j-contrib/community-discourse#readme",
+  "dependencies": {
+    "serverless": "^1.14.0",
+    "serverless-python-requirements": "^2.3.3"
+  }
+}

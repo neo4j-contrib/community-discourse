@@ -17,6 +17,18 @@ db_driver = GraphDatabase.driver(f"bolt://{host_port}", auth=(user, password), m
 discourse_api_key = decrypt_value_str(os.environ['DISCOURSE_API_KEY'])
 discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
 
+# {'topic':
+#      {'tags': ['kudos-4'],
+#       'id': 1241, 'title': 'Boltalyzer', 'fancy_title': 'Boltalyzer', 'posts_count': 1, 'created_at': '2018-09-06T21:42:52.784Z', 'views': 224,
+#       'reply_count': 0,
+#       'like_count': 1,
+#       'last_posted_at': '2018-09-06T21:42:52.853Z', 'visible': True, 'closed': False, 'archived': False,
+#       'archetype': 'regular', 'slug': 'boltalyzer',
+#       'category_id': 9, 'word_count': 56, 'deleted_at': None, 'pending_posts_count': 0, 'user_id': 10, 'featured_link': None, 'pinned_globally': False, 'pinned_at': None, 'pinned_until': None, 'unpinned': None, 'pinned': False,
+#       'highest_post_number': 1, 'deleted_by': None, 'has_deleted': False, 'bookmarked': None, 'participant_count': 1,
+#       'created_by': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'},
+#       'last_poster': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'}}}
+
 community_content_query = """\
 MERGE (user:DiscourseUser {id: $params.topic.user_id })
 SET user.name = $params.topic.created_by.username,
@@ -30,7 +42,8 @@ SET topic.title = $params.topic.title,
     topic.rating = $params.rating,
     topic.likeCount = toInteger($params.topic.like_count),
     topic.views = toInteger($params.topic.views),
-    topic.replyCount = toInteger($params.topic.replyCount)
+    topic.replyCount = toInteger($params.topic.reply_count),
+    topic.categoryId = $params.topic.category_id
 
 MERGE (user)-[:POSTED_CONTENT]->(topic)
 """
