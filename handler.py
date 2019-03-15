@@ -2,20 +2,34 @@ import json
 import os
 import re
 import requests
+import boto3
 
 from bs4 import BeautifulSoup
 from neo4j.v1 import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from util.encryption import decrypt_value_str, encrypt_value
 
-host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
-user = decrypt_value_str(os.environ['GRAPHACADEMY_DB_USER'])
-password = decrypt_value_str(os.environ['GRAPHACADEMY_DB_PW'])
+from retrying import retry
+import random
 
-db_driver = GraphDatabase.driver(f"bolt://{host_port}", auth=(user, password), max_retry_time=15)
+ssmc = boto3.client('ssm')
 
-discourse_api_key = decrypt_value_str(os.environ['DISCOURSE_API_KEY'])
-discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
+def get_ssm_param(key):
+  resp = ssmc.get_parameter(
+    Name=key,
+    WithDecryption=True
+  )
+  return resp['Parameter']['Value']
+
+host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
+user = get_ssm_param('com.neo4j.graphacademy.dbuser')
+password = get_ssm_param('com.neo4j.graphacademy.dbpassword')
+
+db_driver = GraphDatabase.driver("bolt+routing://%s" % (host_port), auth=(user, password), max_retry_time=15)
+
+discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
+discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
+
 
 # {'topic':
 #      {'tags': ['kudos-4'],
@@ -56,8 +70,45 @@ RETURN topic
 kudos_message = """
 Thanks for submitting!
  
-I’ve added a tag that allows your blog to be displayed on the community home page!
+I've added a tag that allows your blog to be displayed on the community home page!
 """
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def get_community_content_active(params):
+    with db_driver.session() as session:
+        result = session.run(community_content_active_query, params)
+        print(result.summary().counters)
+        row = result.peek()
+        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
+        return content_already_approved
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_community_content(params):
+    with db_driver.session() as session:
+        result = session.run(community_content_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_user_events(params):
+    with db_driver.session() as session:
+        result = session.run(user_events_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_import_twin4j(params):
+    with db_driver.session() as session:
+        result = session.run(import_twin4j_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_update_topics(params):
+    with db_driver.session() as session:
+        result = session.run(update_topics_query, params)
+        print(result.summary().counters)
+        return True
 
 
 def community_content(request, context):
@@ -71,10 +122,7 @@ def community_content(request, context):
     json_payload = json.loads(body)
     print(json_payload)
 
-    with db_driver.session() as session:
-        result = session.run(community_content_active_query, {"params": json_payload})
-        row = result.peek()
-        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
+    content_already_approved = get_community_content({"params": json_payload})
 
     tags = json_payload["topic"]["tags"]
     kudos_tags = [tag for tag in tags if tag.startswith("kudos")]
@@ -83,9 +131,7 @@ def community_content(request, context):
         json_payload["approved"] = True
         json_payload["rating"] = int(kudos_tags[0].split("-")[-1])
 
-    with db_driver.session() as session:
-        result = session.run(community_content_query, {"params": json_payload})
-        print(result.summary().counters)
+    set_community_content({"params": json_payload})
 
     if len(kudos_tags) > 0 and not content_already_approved:
         uri = f"https://community.neo4j.com/posts.json"
@@ -145,17 +191,15 @@ def user_events(request, context):
 
     if event_type == "user" and event == "user_created":
         print("User created so we'll update everything when they login")
-        return
+        return {"statusCode": 200, "body": "It was just a user creation event", "headers": {}}
 
     body = request["body"]
     json_payload = json.loads(body)
     print(json_payload)
 
-    with db_driver.session() as session:
-        result = session.run(user_events_query, {"params": json_payload})
-        print(result.summary().counters)
+    set_user_events({"params": json_payload})
 
-    return {"statusCode": 200, "body": "Got the event", "headers": {}}
+    return {"statusCode": 200, "body": "Updated user", "headers": {}}
 
 
 import_twin4j_query = """\
@@ -223,9 +267,7 @@ def import_twin4j(request, context):
 
     print(params)
 
-    with db_driver.session() as session:
-        result = session.run(import_twin4j_query, params)
-        print(result.summary().counters)
+    set_import_twin4j(params)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
@@ -258,7 +300,9 @@ def update_profile(request, context):
         r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
         print(r)
 
-        return {"statusCode": 200, "body": "Got the event", "headers": {}}
+        return {"statusCode": 200, "body": "Updated user bio", "headers": {}}
+    else:
+        return {"statusCode": 200, "body": "No action necessary", "headers": {}}
 
 
 update_topics_query = """\
@@ -279,7 +323,5 @@ def update_topics(request, context):
     topics = [topic for topic in json_payload["topic_list"]["topics"]
               if not topic["pinned"]]
     print(topics)
-
-    with db_driver.session() as session:
-        result = session.run(update_topics_query, {"params": topics})
-        print(result.summary().counters)
+ 
+    set_update_topics({"params": topics})
