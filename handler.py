@@ -122,7 +122,7 @@ def community_content(request, context):
     json_payload = json.loads(body)
     print(json_payload)
 
-    content_already_approved = get_community_content({"params": json_payload})
+    content_already_approved = get_community_content_active({"params": json_payload})
 
     tags = json_payload["topic"]["tags"]
     kudos_tags = [tag for tag in tags if tag.startswith("kudos")]
@@ -192,6 +192,10 @@ def user_events(request, context):
     if event_type == "user" and event == "user_created":
         print("User created so we'll update everything when they login")
         return {"statusCode": 200, "body": "It was just a user creation event", "headers": {}}
+    elif event_type == "user" and event == "user_destroyed":
+        print("User destroyed so no longer need to care about user")
+        return {"statusCode": 200, "body": "It was just a user destruction event -- no action as dont know reason", "headers": {}}
+
 
     body = request["body"]
     json_payload = json.loads(body)
