@@ -60,6 +60,16 @@ functions:
       handler: handler.update_topics
       events:
         - schedule: rate(1 hour)
+  fetch-medium-posts:
+      name: Discourse-FetchMediumPosts
+      handler: handler.fetch_medium_posts
+      events:
+        - schedule: rate(10 minutes)
+  post-medium-to-discourse:
+      name: Discourse-PostMediumToDiscourse
+      handler: handler.post_medium_to_discourse
+      events:
+        - schedule: rate(5 minutes)
 
 package:
   exclude:

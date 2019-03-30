@@ -2,6 +2,7 @@ import json
 import os
 import re
 import requests
+import feedparser
 import boto3
 
 from bs4 import BeautifulSoup
@@ -21,6 +22,8 @@ def get_ssm_param(key):
   )
   return resp['Parameter']['Value']
 
+discourse_blog_category_id = 122
+
 host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
 user = get_ssm_param('com.neo4j.graphacademy.dbuser')
 password = get_ssm_param('com.neo4j.graphacademy.dbpassword')
@@ -29,6 +32,8 @@ db_driver = GraphDatabase.driver("bolt+routing://%s" % (host_port), auth=(user, 
 
 discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
 discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
+
+discourse_root_api_key =  get_ssm_param('com.neo4j.devrel.discourse.rootapikey')
 
 
 # {'topic':
@@ -317,6 +322,79 @@ SET topic.likeCount = toInteger(t.like_count),
     topic.replyCount = toInteger(t.replyCount)
 """
 
+store_medium_post_query = """\
+MATCH (ma:MediumAuthor {name: $author})
+MERGE (mp:MediumPost {guid: $guid})
+ON CREATE SET
+  mp.title = $title,
+  mp.author = $author,
+  mp.url = $url,
+  mp.content = $content,
+  mp.date = $date
+MERGE (mp)-[:AUTHORED_BY]->(ma)
+"""
+
+get_medium_posts_query = """\
+MATCH (mp:MediumPost)-[:AUTHORED_BY]->(ma:MediumAuthor)-[:HAS_DISCOURSE]->(du:DiscourseUser)
+WHERE
+  mp.discourse_id IS NULL
+RETURN
+  mp.title AS title,
+  mp.url AS url,
+  mp.content AS content,
+  mp.date AS date,
+  mp.guid AS guid,
+  du.name AS discourse_user
+"""
+
+set_medium_post_posted_query = """\
+MATCH (mp:MediumPost)
+WHERE
+  mp.guid = $mediumId
+SET
+  mp.discourse_id = $discourseId
+"""
+
+def fetch_medium_posts(request, context):
+    d = feedparser.parse('https://medium.com/feed/neo4j')
+    post_count = 0
+    for entry in d.entries:
+      post_count = post_count + 1
+      guid = entry.guid 
+      blog_author = entry.author
+      blog_url = entry.link
+      blog_title = entry.title
+      blog_content = entry.content[0].value
+      date = entry.published_parsed
+      blog_date = "%d-%02d-%02d" % (date.tm_year, date.tm_mon, date.tm_mday)
+      with db_driver.session() as session:
+        params = {"title": blog_title, "author": blog_author, "url": blog_url, "date": blog_date, "guid": guid, "content": blog_content}
+        result = session.run(store_medium_post_query, params)
+        result.consume()
+
+def post_medium_to_discourse(request, context):
+    counter = 0
+    with db_driver.session() as session:
+      result = session.run(get_medium_posts_query, {})
+      for record in result:
+        dt = post_topic_to_discourse(discourse_blog_category_id, record['discourse_user'], record['title'], record['content'], record['date'])
+        counter = counter + 1
+        if 'id' in dt:
+          params = {"discourseId": dt['id'], "mediumId": record['guid']}
+          update_res = session.run(set_medium_post_posted_query, params)
+          update_res.consume()
+    return "Posted %d posts to discourse" % (counter)
+
+def post_topic_to_discourse(category, username, title, body, published_date):
+    post_data = {}
+    post_data['title'] = title
+    post_data['category'] = category
+    post_data['raw'] = body
+    post_data['created_at'] = published_date
+    params = "api_key=%s&api_username=%s" % (discourse_root_api_key, username)
+    r = requests.post("https://community.neo4j.com/posts.json?%s" % (params), json=post_data)
+    print(r.content)
+    return json.loads(r.content)
 
 def update_topics(request, context):
     uri = "https://community.neo4j.com/c/68.json"
