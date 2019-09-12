@@ -5,6 +5,15 @@ frameworkVersion: ">=1.2.0 <2.0.0"
 custom:
   stage: "${opt:stage, self:provider.stage}"
   kmsKeyArn: ${file(env.yml):${self:custom.stage}.KEY_ARN}
+  BadgesTopic:
+    Fn::Join:
+      - ":"
+      - - arn
+        - aws
+        - sns
+        - Ref: AWS::Region
+        - Ref: AWS::AccountId
+        - Discourse-Badges
 
 provider:
   name: aws
@@ -17,6 +26,11 @@ provider:
         - KMS:Decrypt
       Resource:
         - ${self:custom.kmsKeyArn}
+    - Effect: 'Allow'
+      Action:
+        - "sns:Publish"
+      Resource:
+        - ${self:custom.BadgesTopic}
 
 plugins:
   - serverless-python-requirements
@@ -32,6 +46,14 @@ functions:
       handler: handler.user_events
       events:
         - http: POST UserEvents
+  badges:
+      name: Discourse-AssignBadges
+      handler: handler.assign_badges
+      events:
+        - sns:
+            topicName: Discourse-Badges
+            displayName: Topic to handle assigning of badges
+
   import-twin4j:
       name: Discourse-ImportTWIN4j
       handler: handler.import_twin4j

@@ -1,12 +1,14 @@
 import json
 import os
 import re
-import requests
 
+import boto3
+import requests
 from bs4 import BeautifulSoup
 from neo4j.v1 import GraphDatabase
 from requests_toolbelt import MultipartEncoder
-from util.encryption import decrypt_value_str, encrypt_value
+
+from util.encryption import decrypt_value_str
 
 host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
 user = decrypt_value_str(os.environ['GRAPHACADEMY_DB_USER'])
@@ -132,7 +134,7 @@ def user_events(request, context):
 
     if event_type == "user" and event == "user_created":
         print("User created so we'll update everything when they login")
-        return
+        return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
     body = request["body"]
     json_payload = json.loads(body)
@@ -142,7 +144,60 @@ def user_events(request, context):
         result = session.run(user_events_query, {"params": json_payload})
         print(result.summary().counters)
 
+    context_parts = context.invoked_function_arn.split(':')
+    topic_name = "Discourse-Badges"
+    region = context_parts[3]
+    account_id = context_parts[4]
+    topic_arn = f"arn:aws:sns:{region}:{account_id}:{topic_name}"
+
+    sns = boto3.client('sns')
+    message = {
+        "externalId": json_payload["user"]["external_id"],
+        "userName": json_payload["user"]["username"],
+        "badgeId": "103"
+    }
+    sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
+
+did_user_pass_query = """
+MATCH path = (user:User {auth0_key: $externalId})-[:TOOK]->(exam)
+WHERE exists(exam.certificatePath) AND exam.passed
+WITH count(*) AS count
+RETURN CASE WHEN count > 0 THEN true ELSE false END AS certified
+"""
+
+
+def assign_badges(event, context):
+    for record in event["Records"]:
+        print(record)
+
+        message = json.loads(record["Sns"]["Message"])
+        external_id = message["externalId"]
+        badge_id = message["badgeId"]
+        user_name = message["userName"]
+
+        # Check if the user earnt the badge
+        with db_driver.session() as session:
+            is_certified = session.run(did_user_pass_query, {"externalId": external_id}).single()["certified"]
+
+        if is_certified:
+            print("User is certified, assigned badge")
+            uri = f"https://community.neo4j.com/user_badges.json"
+
+            payload = {
+                "api_key": discourse_api_key,
+                "api_user_name": discourse_api_user,
+                "username": user_name,
+                "badge_id": badge_id
+            }
+
+            print(payload)
+
+            m = MultipartEncoder(fields=payload)
+            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+            print(r)
 
 
 import_twin4j_query = """\
@@ -228,7 +283,8 @@ def update_profile(request, context):
     print(json_payload)
 
     post_payload = json_payload.get("post")
-    if event_type == "post" and event in ["post_edited", "post_created"] and post_payload and post_payload.get("post_number") == 1:
+    if event_type == "post" and event in ["post_edited", "post_created"] and post_payload and post_payload.get(
+            "post_number") == 1:
         post = json_payload["post"]
         username = post["username"]
         bio = post["cooked"]
@@ -245,7 +301,7 @@ def update_profile(request, context):
         r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
         print(r)
 
-        return {"statusCode": 200, "body": "Got the event", "headers": {}}
+    return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
 
 update_topics_query = """\
