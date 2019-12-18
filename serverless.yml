@@ -44,6 +44,18 @@ functions:
       timeout: 30
       events:
         - http: POST UserEvents
+  assign-edu-group:
+      name: Discourse-AssignEduGroupWebHook
+      handler: handler.assign_edu_group
+      timeout: 30
+      events:
+        - schedule: rate(24 hours)
+  send-edu-discourse-invites:
+      name: Discourse-SendEduDiscourseWebHook
+      handler: handler.send_edu_discourse_invites
+      timeout: 30
+      events:
+        - schedule: rate(24 hours)
   import-twin4j:
       name: Discourse-ImportTWIN4j
       handler: handler.import_twin4j
