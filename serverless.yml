@@ -5,6 +5,8 @@ frameworkVersion: ">=1.2.0 <2.0.0"
 custom:
   stage: "${opt:stage, self:provider.stage}"
   kmsKeyArn: ${file(env.yml):${self:custom.stage}.KEY_ARN}
+  pythonRequirements:
+    dockerizePip: non-linux
 
 provider:
   name: aws
@@ -17,6 +19,14 @@ provider:
         - KMS:Decrypt
       Resource:
         - ${self:custom.kmsKeyArn}
+    - Effect: "Allow"
+      Action:
+        - "ssm:GetParameter"
+      Resource: "arn:aws:ssm:*:715633473519:parameter/com.neo4j.devrel.discourse.*"
+    - Effect: "Allow"
+      Action:
+        - "ssm:GetParameter"
+      Resource: "arn:aws:ssm:*:715633473519:parameter/com.neo4j.graphacademy.*"
 
 plugins:
   - serverless-python-requirements
@@ -25,6 +35,7 @@ functions:
   community-content:
       name: Discourse-CommunityContentWebHook
       handler: handler.community_content
+      timeout: 30
       events:
         - http: POST CommunityContent
   import-posts-topics:
@@ -35,6 +46,7 @@ functions:
   user-events:
       name: Discourse-UserEventsWebHook
       handler: handler.user_events
+      timeout: 30
       events:
         - http: POST UserEvents
   import-twin4j:
@@ -45,6 +57,7 @@ functions:
   update-profile:
       name: Discourse-UpdateProfileWebHook
       handler: handler.update_profile
+      timeout: 30
       events:
         - http: POST UpdateProfile
   update-topics:
@@ -57,6 +70,16 @@ functions:
       handler: handler.update_categories
       events:
         - schedule: rate(1 hour)
+  fetch-medium-posts:
+      name: Discourse-FetchMediumPosts
+      handler: handler.fetch_medium_posts
+      events:
+        - schedule: rate(10 minutes)
+  post-medium-to-discourse:
+      name: Discourse-PostMediumToDiscourse
+      handler: handler.post_medium_to_discourse
+      events:
+        - schedule: rate(5 minutes)
 
 package:
   exclude:

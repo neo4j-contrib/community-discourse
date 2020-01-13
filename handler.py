@@ -2,20 +2,39 @@ import json
 import os
 import re
 import requests
+import feedparser
+import boto3
 
 from bs4 import BeautifulSoup
 from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from util.encryption import decrypt_value_str, encrypt_value
 
-host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
-user = decrypt_value_str(os.environ['GRAPHACADEMY_DB_USER'])
-password = decrypt_value_str(os.environ['GRAPHACADEMY_DB_PW'])
+from retrying import retry
+import random
 
-db_driver = GraphDatabase.driver(f"bolt+routing://{host_port}", auth=(user, password), max_retry_time=15)
+ssmc = boto3.client('ssm')
 
-discourse_api_key = decrypt_value_str(os.environ['DISCOURSE_API_KEY'])
-discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
+def get_ssm_param(key):
+  resp = ssmc.get_parameter(
+    Name=key,
+    WithDecryption=True
+  )
+  return resp['Parameter']['Value']
+
+discourse_blog_category_id = 122
+
+host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
+user = get_ssm_param('com.neo4j.graphacademy.dbuser')
+password = get_ssm_param('com.neo4j.graphacademy.dbpassword')
+
+db_driver = GraphDatabase.driver("bolt+routing://%s" % (host_port), auth=(user, password), max_retry_time=15)
+
+discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
+discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
+
+discourse_root_api_key =  get_ssm_param('com.neo4j.devrel.discourse.rootapikey')
+
 
 # {'topic':
 #      {'tags': ['kudos-4'],
@@ -119,8 +138,45 @@ RETURN topic
 kudos_message = """
 Thanks for submitting!
  
-I’ve added a tag that allows your blog to be displayed on the community home page!
+I've added a tag that allows your blog to be displayed on the community home page!
 """
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def get_community_content_active(params):
+    with db_driver.session() as session:
+        result = session.run(community_content_active_query, params)
+        print(result.summary().counters)
+        row = result.peek()
+        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
+        return content_already_approved
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_community_content(params):
+    with db_driver.session() as session:
+        result = session.run(community_content_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_user_events(params):
+    with db_driver.session() as session:
+        result = session.run(user_events_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_import_twin4j(params):
+    with db_driver.session() as session:
+        result = session.run(import_twin4j_query, params)
+        print(result.summary().counters)
+        return True
+
+@retry(stop_max_attempt_number=5, wait_random_max=1000)
+def set_update_topics(params):
+    with db_driver.session() as session:
+        result = session.run(update_topics_query, params)
+        print(result.summary().counters)
+        return True
 
 
 def community_content(request, context):
@@ -134,10 +190,7 @@ def community_content(request, context):
     json_payload = json.loads(body)
     print(json_payload)
 
-    with db_driver.session() as session:
-        result = session.run(community_content_active_query, {"params": json_payload})
-        row = result.peek()
-        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
+    content_already_approved = get_community_content_active({"params": json_payload})
 
     tags = json_payload["topic"]["tags"]
     kudos_tags = [tag for tag in tags if tag.startswith("kudos")]
@@ -146,9 +199,7 @@ def community_content(request, context):
         json_payload["approved"] = True
         json_payload["rating"] = int(kudos_tags[0].split("-")[-1])
 
-    with db_driver.session() as session:
-        result = session.run(community_content_query, {"params": json_payload})
-        print(result.summary().counters)
+    set_community_content({"params": json_payload})
 
     if len(kudos_tags) > 0 and not content_already_approved:
         uri = f"https://community.neo4j.com/posts.json"
@@ -208,17 +259,19 @@ def user_events(request, context):
 
     if event_type == "user" and event == "user_created":
         print("User created so we'll update everything when they login")
-        return
+        return {"statusCode": 200, "body": "It was just a user creation event", "headers": {}}
+    elif event_type == "user" and event == "user_destroyed":
+        print("User destroyed so no longer need to care about user")
+        return {"statusCode": 200, "body": "It was just a user destruction event -- no action as dont know reason", "headers": {}}
+
 
     body = request["body"]
     json_payload = json.loads(body)
     print(json_payload)
 
-    with db_driver.session() as session:
-        result = session.run(user_events_query, {"params": json_payload})
-        print(result.summary().counters)
+    set_user_events({"params": json_payload})
 
-    return {"statusCode": 200, "body": "Got the event", "headers": {}}
+    return {"statusCode": 200, "body": "Updated user", "headers": {}}
 
 
 import_twin4j_query = """\
@@ -286,9 +339,7 @@ def import_twin4j(request, context):
 
     print(params)
 
-    with db_driver.session() as session:
-        result = session.run(import_twin4j_query, params)
-        print(result.summary().counters)
+    set_import_twin4j(params)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
@@ -321,7 +372,9 @@ def update_profile(request, context):
         r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
         print(r)
 
-        return {"statusCode": 200, "body": "Got the event", "headers": {}}
+        return {"statusCode": 200, "body": "Updated user bio", "headers": {}}
+    else:
+        return {"statusCode": 200, "body": "No action necessary", "headers": {}}
 
 
 update_topics_query = """\
@@ -332,6 +385,79 @@ SET topic.likeCount = toInteger(t.like_count),
     topic.replyCount = toInteger(t.replyCount)
 """
 
+store_medium_post_query = """\
+MATCH (ma:MediumAuthor {name: $author})
+MERGE (mp:MediumPost {guid: $guid})
+ON CREATE SET
+  mp.title = $title,
+  mp.author = $author,
+  mp.url = $url,
+  mp.content = $content,
+  mp.date = $date
+MERGE (mp)-[:AUTHORED_BY]->(ma)
+"""
+
+get_medium_posts_query = """\
+MATCH (mp:MediumPost)-[:AUTHORED_BY]->(ma:MediumAuthor)-[:HAS_DISCOURSE]->(du:DiscourseUser)
+WHERE
+  mp.discourse_id IS NULL
+RETURN
+  mp.title AS title,
+  mp.url AS url,
+  mp.content AS content,
+  mp.date AS date,
+  mp.guid AS guid,
+  du.name AS discourse_user
+"""
+
+set_medium_post_posted_query = """\
+MATCH (mp:MediumPost)
+WHERE
+  mp.guid = $mediumId
+SET
+  mp.discourse_id = $discourseId
+"""
+
+def fetch_medium_posts(request, context):
+    d = feedparser.parse('https://medium.com/feed/neo4j')
+    post_count = 0
+    for entry in d.entries:
+      post_count = post_count + 1
+      guid = entry.guid 
+      blog_author = entry.author
+      blog_url = entry.link
+      blog_title = entry.title
+      blog_content = entry.content[0].value
+      date = entry.published_parsed
+      blog_date = "%d-%02d-%02d" % (date.tm_year, date.tm_mon, date.tm_mday)
+      with db_driver.session() as session:
+        params = {"title": blog_title, "author": blog_author, "url": blog_url, "date": blog_date, "guid": guid, "content": blog_content}
+        result = session.run(store_medium_post_query, params)
+        result.consume()
+
+def post_medium_to_discourse(request, context):
+    counter = 0
+    with db_driver.session() as session:
+      result = session.run(get_medium_posts_query, {})
+      for record in result:
+        dt = post_topic_to_discourse(discourse_blog_category_id, record['discourse_user'], record['title'], record['content'], record['date'])
+        counter = counter + 1
+        if 'id' in dt:
+          params = {"discourseId": dt['id'], "mediumId": record['guid']}
+          update_res = session.run(set_medium_post_posted_query, params)
+          update_res.consume()
+    return "Posted %d posts to discourse" % (counter)
+
+def post_topic_to_discourse(category, username, title, body, published_date):
+    post_data = {}
+    post_data['title'] = title
+    post_data['category'] = category
+    post_data['raw'] = body
+    post_data['created_at'] = published_date
+    params = "api_key=%s&api_username=%s" % (discourse_root_api_key, username)
+    r = requests.post("https://community.neo4j.com/posts.json?%s" % (params), json=post_data)
+    print(r.content)
+    return json.loads(r.content)
 
 def update_topics(request, context):
     uri = "https://community.neo4j.com/c/68.json"
@@ -343,9 +469,7 @@ def update_topics(request, context):
               if not topic["pinned"]]
     print(topics)
 
-    with db_driver.session() as session:
-        result = session.run(update_topics_query, {"params": topics})
-        print(result.summary().counters)
+    set_update_topics({"params": topics})
 
 update_categories_subcategories_query = """\
 UNWIND $params AS event
@@ -393,3 +517,5 @@ def update_categories(request, context):
 
 
 
+ 
+    
