@@ -9,7 +9,7 @@ custom:
 provider:
   name: aws
   runtime: python3.6
-  timeout: 180
+  timeout: 30
   environment: ${file(env.yml):${self:custom.stage}}
   iamRoleStatements: # permissions for all of your functions can be set here
     - Effect: Allow
@@ -27,6 +27,11 @@ functions:
       handler: handler.community_content
       events:
         - http: POST CommunityContent
+  import-posts-topics:
+      name: Discourse-ImportPostsTopics
+      handler: handler.import_posts_topics
+      events:
+        - http: POST ImportPostsTopics
   user-events:
       name: Discourse-UserEventsWebHook
       handler: handler.user_events
@@ -45,6 +50,11 @@ functions:
   update-topics:
       name: Discourse-UpdateTopics
       handler: handler.update_topics
+      events:
+        - schedule: rate(1 hour)
+  update-categories:
+      name: Discourse-UpdateCategories
+      handler: handler.update_categories
       events:
         - schedule: rate(1 hour)
 

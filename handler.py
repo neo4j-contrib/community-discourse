@@ -4,7 +4,7 @@ import re
 import requests
 
 from bs4 import BeautifulSoup
-from neo4j.v1 import GraphDatabase
+from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from util.encryption import decrypt_value_str, encrypt_value
 
@@ -12,7 +12,7 @@ host_port = decrypt_value_str(os.environ['GRAPHACADEMY_DB_HOST_PORT'])
 user = decrypt_value_str(os.environ['GRAPHACADEMY_DB_USER'])
 password = decrypt_value_str(os.environ['GRAPHACADEMY_DB_PW'])
 
-db_driver = GraphDatabase.driver(f"bolt://{host_port}", auth=(user, password), max_retry_time=15)
+db_driver = GraphDatabase.driver(f"bolt+routing://{host_port}", auth=(user, password), max_retry_time=15)
 
 discourse_api_key = decrypt_value_str(os.environ['DISCOURSE_API_KEY'])
 discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
@@ -28,6 +28,69 @@ discourse_api_user = decrypt_value_str(os.environ['DISCOURSE_API_USER'])
 #       'highest_post_number': 1, 'deleted_by': None, 'has_deleted': False, 'bookmarked': None, 'participant_count': 1,
 #       'created_by': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'},
 #       'last_poster': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'}}}
+
+import_post_query = """\
+MERGE (user:DiscourseUser {id: $params.post.user_id })
+ON CREATE SET user.name = $params.post.username,
+    user.avatarTemplate = $params.post.avatar_template
+
+MERGE (topic:DiscourseTopic {id: $params.post.topic_id })
+SET topic.title = $params.post.topic_title, topic.slug = $params.post.topic_slug
+
+MERGE (user)-[:POSTED_CONTENT]->(topic)
+
+MERGE (post:DiscoursePost {id: $params.post.id})
+SET post.text = $params.post.cooked, post.createdAt = datetime($params.post.created_at), 
+    post.number = $params.post.post_number
+
+MERGE (user)-[:POSTED_CONTENT]->(post)
+MERGE (post)-[:PART_OF]->(topic)
+"""
+
+import_topic_query = """\
+MATCH (category:DiscourseCategory {id: $params.topic.category_id})
+
+MERGE (user:DiscourseUser {id: $params.topic.user_id })
+ON CREATE SET user.name = $params.topic.created_by.username,
+              user.avatarTemplate = $params.topic.created_by.avatar_template
+MERGE (topic:DiscourseTopic {id: $params.topic.id })
+SET topic.title = $params.topic.title,
+    topic.createdAt = datetime($params.topic.created_at),
+    topic.slug = $params.topic.slug,
+    topic.approved = $params.approved,
+    topic.rating = $params.rating,
+    topic.likeCount = toInteger($params.topic.like_count),
+    topic.views = toInteger($params.topic.views),
+    topic.replyCount = toInteger($params.topic.reply_count),
+    topic.categoryId = $params.topic.category_id
+
+
+MERGE (topic)-[:IN_CATEGORY]->(category)
+MERGE (user)-[:POSTED_CONTENT]->(topic)
+"""
+
+def import_posts_topics(request, context):
+    headers = request["headers"]
+
+    event_type = headers["X-Discourse-Event-Type"]
+    event = headers["X-Discourse-Event"]
+    print(f"Received {event_type}: {event}")    
+    
+    body = request["body"]
+    json_payload = json.loads(body)
+
+    if event_type == "topic":
+        with db_driver.session() as session:
+            result = session.run(import_topic_query, {"params": json_payload})
+            print(result.summary().counters)
+
+    if event_type == "post":
+        with db_driver.session() as session:
+            result = session.run(import_post_query, {"params": json_payload})
+            print(result.summary().counters)
+
+    return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
 
 community_content_query = """\
 MERGE (user:DiscourseUser {id: $params.topic.user_id })
@@ -283,3 +346,50 @@ def update_topics(request, context):
     with db_driver.session() as session:
         result = session.run(update_topics_query, {"params": topics})
         print(result.summary().counters)
+
+update_categories_subcategories_query = """\
+UNWIND $params AS event
+MERGE (category:DiscourseCategory {id: event.id})
+SET category.name = event.name, category.description = event.description
+WITH category, event
+UNWIND event.subcategory_ids AS subCategoryId
+MERGE (subCategory:DiscourseCategory {id: subCategoryId})
+MERGE (subCategory)-[:CHILD]->(category)
+"""
+
+update_categories_query = """\
+UNWIND $params AS event
+MERGE (category:DiscourseCategory {id: event.id})
+SET category.name = event.name, category.description = event.description
+"""
+
+def update_categories_tx_fn(tx, params):
+    tx.run(tx, params=params)
+
+def update_categories(request, context):
+    uri = f"https://community.neo4j.com/categories.json"
+
+    payload = {
+        "api_key": discourse_api_key,
+        "api_user_name": discourse_api_user
+    }
+
+    r = requests.get(uri, data=payload)
+    response = r.json()
+    print(len(response["category_list"]["categories"]))
+
+    with db_driver.session() as session:
+        categories = response["category_list"]["categories"]
+        result = session.run(update_categories_subcategories_query, params=categories)
+        print(result.summary().counters)
+
+    r = requests.get("https://community.neo4j.com/site.json", data=payload)
+    response = r.json()
+    categories = response["categories"]
+
+    with db_driver.session() as session:
+        result = session.run(update_categories_query, params=categories)
+        print(result.summary().counters)
+
+
+
