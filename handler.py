@@ -12,6 +12,8 @@ from util.encryption import decrypt_value_str, encrypt_value
 
 from retrying import retry
 import random
+import datetime
+from jinja2 import Template
 
 ssmc = boto3.client('ssm')
 
@@ -98,12 +100,12 @@ def import_posts_topics(request, context):
     body = request["body"]
     json_payload = json.loads(body)
 
-    if event_type == "topic":
+    if event_type == "topic" and json_payload["topic"]["archetype"] == "regular":
         with db_driver.session() as session:
             result = session.run(import_topic_query, {"params": json_payload})
             print(result.summary().counters)
 
-    if event_type == "post":
+    if event_type == "post" and json_payload["post"]["topic_archetype"] == "regular":
         with db_driver.session() as session:
             result = session.run(import_post_query, {"params": json_payload})
             print(result.summary().counters)
@@ -515,7 +517,138 @@ def update_categories(request, context):
         result = session.run(update_categories_query, params=categories)
         print(result.summary().counters)
 
+ninjas_so_query = """\
+WITH $now as currentMonth
+Match (u:User:StackOverflow) 
+match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
+WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
+with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
+with currentMonth, week, u.name as user, count(*) as total, sum(case when a.is_accepted then 1 else 0 end) as accepted
+ORDER BY total DESC
+return currentMonth, user, collect([week,total,accepted]) as weekly
+"""
 
+
+ninajs_discourse_query = """\
+MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category) 
+WHERE datetime({year:$year, month:$month+1 }) > post.createdAt >= datetime({year:$year, month:$month })
+with *, post.createdAt.week as week
+with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
+ORDER BY total DESC
+WITH u, collect(["Week " + week, total]) as weekly, categories
+RETURN DISTINCT u.name AS user, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
+"""
+
+def ninja_activity(request, context):
+    now = datetime.datetime.now()
+    with db_driver.session() as session:
+        params = {"year": now.year, "month": now.month }
+        result = session.run(ninajs_discourse_query, params)
+
+        discourse_header = result.keys()
+        discourse_rows = [row.values() for row in result]
+
+        params = {"now": now.strftime("%Y-%m")}
+        result = session.run(ninjas_so_query, params)
+
+        so_header = result.keys()
+        so_rows = [row.values() for row in result]
+
+        t = Template("""\
+            <html>
+            <head>
+                <style>
+                #customers {
+                font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+                border-collapse: collapse;
+                width: 100%;
+                }
+
+                #customers td, #customers th {
+                border: 1px solid #ddd;
+                padding: 8px;
+                }
+
+                #customers tr:nth-child(even){background-color: #f2f2f2;}
+
+                #customers tr:hover {background-color: #ddd;}
+
+                #customers th {
+                padding-top: 12px;
+                padding-bottom: 12px;
+                text-align: left;
+                background-color: #4291d6;
+                color: white;
+                }
+                </style>
+            </head>
+            <body>
+            <p>
+                Hi Karin,
+            </p>
+            <p>
+                The Neo4j Ninjas have been busy. See below for the biggest contributors this month.
+            </p>
+
+            <p>
+                Cheers, Greta the Graph Giraffe
+            </p>
+
+            <h2>Discourse Activity</h2>
+            <table id="customers">
+                <tr>
+                {% for column in discourse_header %}
+                    <th>{{column}}</th>
+                {% endfor %}                    
+                </tr> 
+                {% for row in discourse_rows %} 
+                    <tr>
+                        {% for column in row %}
+                            <td>{{ column }}</td>
+                        {% endfor %}                        
+                    </tr> 
+                {% endfor %}
+            </table>
+
+            <h2>StackOverflow Activity</h2>
+            <table id="customers">
+                <tr>
+                {% for column in so_header %}
+                    <th>{{column}}</th>
+                {% endfor %}                    
+                </tr> 
+                {% for row in so_rows %} 
+                    <tr>
+                        {% for column in row %}
+                            <td>{{ column }}</td>
+                        {% endfor %}                        
+                    </tr> 
+                {% endfor %}
+            </table>
+            </body>
+            </html>""")
+        message = t.render(
+            discourse_rows = discourse_rows, 
+            discourse_header=discourse_header,
+            so_header = so_header,
+            so_rows = so_rows
+            )
+
+        client = boto3.client('ses')
+        response = client.send_email(
+            Source="mark.needham@neo4j.com", 
+            Destination={"ToAddresses": ["karinwolok1@gmail.com"]}, 
+            Message={
+                "Body": {
+                    "Html": {
+                        "Data": message
+                    }
+                }, 
+                "Subject": {
+                    "Data": f"Ninja Activity on {now.strftime('%d %b %Y at %H:%M')}" 
+                }
+            })
+        print(response)
 
  
     

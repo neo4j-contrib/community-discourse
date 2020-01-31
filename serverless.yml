@@ -80,6 +80,11 @@ functions:
       handler: handler.post_medium_to_discourse
       events:
         - schedule: rate(5 minutes)
+  ninja-activity:
+    name: Discourse-NinjaActivity
+    handler: handler.ninja_activity
+    events:
+      - schedule: rate(1 hour)        
 
 package:
   exclude:
