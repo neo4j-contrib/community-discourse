@@ -45,7 +45,7 @@ functions:
       events:
         - http: POST UserEvents
   assign-edu-group:
-      name: Discourse-AssignEduGroupWebHook
+      name: Discourse-AssignEduGroup
       handler: handler.assign_edu_group
       timeout: 30
       events:

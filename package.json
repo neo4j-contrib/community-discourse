@@ -25,7 +25,8 @@
   },
   "homepage": "https://github.com/neo4j-contrib/community-discourse#readme",
   "dependencies": {
-    "serverless": "^1.14.0",
-    "serverless-python-requirements": "^2.3.3"
+    "feedparser": "^2.2.9",
+    "serverless": "^1.62.0",
+    "serverless-python-requirements": "^2.5.0"
   }
 }

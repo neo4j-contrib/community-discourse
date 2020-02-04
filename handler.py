@@ -6,7 +6,7 @@ import feedparser
 import boto3
 
 from bs4 import BeautifulSoup
-from neo4j.v1 import GraphDatabase
+from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from util.encryption import decrypt_value_str, encrypt_value
 
@@ -230,74 +230,83 @@ import_twin4j_query = """\
     RETURN value
     """
 
-edu_discourse_users_query = """
-MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)-[r2:DISCOURSE_ACCOUNT]-(discourse:DiscourseUser)
-WHERE edu.status = 'APPROVED'
-RETURN discourse.name as discourse_users
-"""
+def edu_discourse_users_query(tx):
+    query = """
+    MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)-[r2:DISCOURSE_ACCOUNT]-(discourse:DiscourseUser)
+    WHERE edu.status = 'APPROVED'
+    RETURN discourse.name as discourse_users
+    """
+    return tx.run(query)
 
-def assign_edu_group(params):
+def assign_edu_group():
     counter = 0
     uri = f"https://community.neo4j.com/groups/49/members.json"
 
     with db_driver.session() as session:
-      result = session.run(edu_discourse_users_query, {})
+        #result = session.run(edu_discourse_users_query, {})
+        result = session.read_transaction(edu_discourse_users_query)
 
-      for record in result:
-        group = group + ',' + record
-        counter = counter + 1
+        for record in result:
+            group = group + ',' + record
+            counter = counter + 1
 
-        payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
-            "usernames": group
-        }
+            payload = {
+                "api_key": discourse_api_key,
+                "api_user_name": discourse_api_user,
+                "usernames": group
+            }
 
-        print(payload)
+            print(payload)
 
-        m = MultipartEncoder(fields=payload)
-        r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
-        print(r)
-        print("Added %d users to Edu group" % (counter))
+            m = MultipartEncoder(fields=payload)
+            r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+            print(r)
+            print("Added %d users to Edu group" % (counter))
 
-edu_discourse_invite_query = """
-MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
-WHERE edu.status = 'APPROVED'
-AND NOT exists(user.discourseInviteSent)
-AND NOT exists((user)-[:DISCOURSE_ACCOUNT]-(:DiscourseUser))
-RETURN DISTINCT(user.email) as edu_email
-"""
+def edu_discourse_invite_query(tx):
+    query = """
+    MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
+    WHERE edu.status = 'APPROVED'
+    AND NOT exists(user.discourseInviteSent)
+    AND NOT exists((user)-[:DISCOURSE_ACCOUNT]-(:DiscourseUser))
+    RETURN DISTINCT(user.email) as edu_email
+    """
+    return tx.run(query)
 
-edu_discourse_invited_update = """
-WITH $params.result as usersInvited
-MATCH (user:User)-[:SUBMITTED_APPLICATION]->(:EduApplication)
-WHERE user.email IN usersInvited
- SET user.discourseInviteSent = datetime()
-RETURN count(user)
-"""
+def edu_discourse_invited_update(tx):
+    query = """
+    WITH $result as usersInvited
+    MATCH (user:User)-[:SUBMITTED_APPLICATION]->(:EduApplication)
+    WHERE user.email IN usersInvited
+     SET user.discourseInviteSent = datetime()
+    RETURN count(user)
+    """
+    return tx.run(query)
 
-def send_edu_discourse_invites(params):
+def send_edu_discourse_invites():
     uri = f"https://community.neo4j.com/invites"
 
     with db_driver.session() as session:
-      result = session.run(edu_discourse_invite_query, {})
+        #result = session.run(edu_discourse_invite_query, {})
+        result = session.read_transaction(edu_discourse_invite_query)
 
-      for record in result:
-        payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
-            "email": record,
-            "group_names": "Neo4j-Educators",
-            "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
-        }
+        for record in result:
+            payload = {
+                "api_key": discourse_api_key,
+                "api_user_name": discourse_api_user,
+                "email": record,
+                "group_names": "Neo4j-Educators",
+                "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
+            }
 
-        print(payload)
+            print(payload)
 
-        m = MultipartEncoder(fields=payload)
-        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
-        print(r)
+            m = MultipartEncoder(fields=payload)
+            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+            print(r)
 
-        updatedUsers = session.run(edu_discourse_invited_update, {params: result})
+            #updatedUsers = session.run(edu_discourse_invited_update, {params: result})
+            updatedUsers = session.read_transaction(edu_discourse_invited_update, result=result)
 
         return "Updated %d users invited" % (updatedUsers)
 
