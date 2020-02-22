@@ -61,7 +61,7 @@ SET topic.title = $params.post.topic_title, topic.slug = $params.post.topic_slug
 MERGE (user)-[:POSTED_CONTENT]->(topic)
 
 MERGE (post:DiscoursePost {id: $params.post.id})
-SET post.text = $params.post.cooked, post.createdAt = datetime($params.post.created_at), 
+SET post.text = $params.post.cooked, post.createdAt = datetime($params.post.created_at),
     post.number = $params.post.post_number
 
 MERGE (user)-[:POSTED_CONTENT]->(post)
@@ -95,8 +95,8 @@ def import_posts_topics(request, context):
 
     event_type = headers["X-Discourse-Event-Type"]
     event = headers["X-Discourse-Event"]
-    print(f"Received {event_type}: {event}")    
-    
+    print(f"Received {event_type}: {event}")
+
     body = request["body"]
     json_payload = json.loads(body)
 
@@ -139,7 +139,7 @@ RETURN topic
 
 kudos_message = """
 Thanks for submitting!
- 
+
 I've added a tag that allows your blog to be displayed on the community home page!
 """
 
@@ -279,18 +279,18 @@ def user_events(request, context):
 import_twin4j_query = """\
     MERGE (twin4j:TWIN4j {date: datetime($date) })
     SET twin4j.image = $image, twin4j.summaryText = $summaryText, twin4j.link = $link
-    
+
     FOREACH(tag IN $allTheTags |
       MERGE (t:TWIN4jTag {tag: tag.tag, anchor: tag.anchor })
       MERGE (twin4j)-[:CONTAINS_TAG]->(t)
     )
-    
+
     WITH twin4j
     UNWIND $people AS person
     OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
     OPTIONAL MATCH (user:User) where user.id = toInteger(person.stackOverflowId)
     WITH coalesce(twitter, user) AS u, twin4j
-    
+
     CALL apoc.do.when(u is NOT NULL, 'MERGE (twin4j)-[:FEATURED]->(u)', '', {twin4j: twin4j, u: u}) YIELD value
     RETURN value
     """
@@ -425,7 +425,7 @@ def fetch_medium_posts(request, context):
     post_count = 0
     for entry in d.entries:
       post_count = post_count + 1
-      guid = entry.guid 
+      guid = entry.guid
       blog_author = entry.author
       blog_url = entry.link
       blog_title = entry.title
@@ -519,7 +519,7 @@ def update_categories(request, context):
 
 ninjas_so_query = """\
 WITH $now as currentMonth
-Match (u:User:StackOverflow) 
+Match (u:User:StackOverflow)
 match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
 WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
 with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
@@ -530,7 +530,7 @@ return currentMonth, user, collect([week,total,accepted]) as weekly
 
 
 ninajs_discourse_query = """\
-MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category) 
+MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
 WHERE datetime({year:$year, month:$month+1 }) > post.createdAt >= datetime({year:$year, month:$month })
 with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
@@ -599,14 +599,14 @@ def ninja_activity(request, context):
                 <tr>
                 {% for column in discourse_header %}
                     <th>{{column}}</th>
-                {% endfor %}                    
-                </tr> 
-                {% for row in discourse_rows %} 
+                {% endfor %}
+                </tr>
+                {% for row in discourse_rows %}
                     <tr>
                         {% for column in row %}
                             <td>{{ column }}</td>
-                        {% endfor %}                        
-                    </tr> 
+                        {% endfor %}
+                    </tr>
                 {% endfor %}
             </table>
 
@@ -615,20 +615,20 @@ def ninja_activity(request, context):
                 <tr>
                 {% for column in so_header %}
                     <th>{{column}}</th>
-                {% endfor %}                    
-                </tr> 
-                {% for row in so_rows %} 
+                {% endfor %}
+                </tr>
+                {% for row in so_rows %}
                     <tr>
                         {% for column in row %}
                             <td>{{ column }}</td>
-                        {% endfor %}                        
-                    </tr> 
+                        {% endfor %}
+                    </tr>
                 {% endfor %}
             </table>
             </body>
             </html>""")
         message = t.render(
-            discourse_rows = discourse_rows, 
+            discourse_rows = discourse_rows,
             discourse_header=discourse_header,
             so_header = so_header,
             so_rows = so_rows
@@ -636,19 +636,17 @@ def ninja_activity(request, context):
 
         client = boto3.client('ses')
         response = client.send_email(
-            Source="mark.needham@neo4j.com", 
-            Destination={"ToAddresses": ["karinwolok1@gmail.com"]}, 
+            Source="mark.needham@neo4j.com",
+            Destination={"ToAddresses": ["karinwolok1@gmail.com", "m.h.needham@gmail.com"]},
+            # Destination={"ToAddresses": ["m.h.needham@gmail.com"]},
             Message={
                 "Body": {
                     "Html": {
                         "Data": message
                     }
-                }, 
+                },
                 "Subject": {
-                    "Data": f"Ninja Activity on {now.strftime('%d %b %Y at %H:%M')}" 
+                    "Data": f"Ninja Activity on {now.strftime('%d %b %Y at %H:%M')}"
                 }
             })
         print(response)
-
- 
-    

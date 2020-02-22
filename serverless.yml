@@ -27,6 +27,11 @@ provider:
       Action:
         - "ssm:GetParameter"
       Resource: "arn:aws:ssm:*:715633473519:parameter/com.neo4j.graphacademy.*"
+    - Effect: 'Allow'
+      Action:
+        - "ses:SendEmail"
+      Resource:
+        "arn:aws:ses:us-east-1:715633473519:identity/mark.needham@neo4j.com"
 
 plugins:
   - serverless-python-requirements
@@ -84,7 +89,7 @@ functions:
     name: Discourse-NinjaActivity
     handler: handler.ninja_activity
     events:
-      - schedule: rate(1 hour)        
+      - schedule: cron(15 14 ? * 6 *)
 
 package:
   exclude:
