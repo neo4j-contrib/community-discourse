@@ -601,16 +601,16 @@ return currentMonth, user, collect([week,total,accepted]) as weekly
 
 ninajs_discourse_query = """\
 MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-WHERE datetime({year:$year, month:$month+1) > post.createdAt >= datetime({year:$year, month:$month })
+WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
 with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
 ORDER BY week, total DESC
 WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
 WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
 RETURN u.name AS user, email,
-       apoc.coll.toSet(apoc.coll.flatten(collect(weekly))) AS weekly,
+       apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
        apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
-ORDER BY size(weekly) DESC
+ORDER BY size(keys(weekly)) DESC
 """
 
 def ninja_activity(request, context):
