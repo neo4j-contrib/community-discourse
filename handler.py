@@ -301,29 +301,31 @@ WHERE edu.status = 'APPROVED'
 RETURN discourse.name as discourse_users
 """
 
-def assign_edu_group(params):
+def assign_edu_group(request, context):
     counter = 0
+    group = ''
     uri = f"https://community.neo4j.com/groups/49/members.json"
 
     with db_driver.session() as session:
       result = session.run(edu_discourse_users_query, {})
 
       for record in result:
-        group = group + ',' + record
+        #print(record)
+        if counter != 0:
+            group +=  ','
+        group +=  record['discourse_users']
         counter = counter + 1
 
-        payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
-            "usernames": group
-        }
+    payload = {
+        "api_key": discourse_api_key,
+        "api_user_name": discourse_api_user,
+        "usernames": group
+    }
+    print(payload)
 
-        print(payload)
-
-        m = MultipartEncoder(fields=payload)
-        r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
-        print(r)
-        print("Added %d users to Edu group" % (counter))
+    m = MultipartEncoder(fields=payload)
+    r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+    return "Added %d users to Edu group" % (counter)
 
 edu_discourse_invite_query = """
 MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
