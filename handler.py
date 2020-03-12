@@ -12,6 +12,8 @@ from util.encryption import decrypt_value_str, encrypt_value
 
 from retrying import retry
 import random
+import datetime
+from jinja2 import Template
 
 ssmc = boto3.client('ssm')
 
@@ -48,6 +50,69 @@ discourse_root_api_key =  get_ssm_param('com.neo4j.devrel.discourse.rootapikey')
 #       'created_by': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'},
 #       'last_poster': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'}}}
 
+import_post_query = """\
+MERGE (user:DiscourseUser {id: $params.post.user_id })
+ON CREATE SET user.name = $params.post.username,
+    user.avatarTemplate = $params.post.avatar_template
+
+MERGE (topic:DiscourseTopic {id: $params.post.topic_id })
+SET topic.title = $params.post.topic_title, topic.slug = $params.post.topic_slug
+
+MERGE (user)-[:POSTED_CONTENT]->(topic)
+
+MERGE (post:DiscoursePost {id: $params.post.id})
+SET post.text = $params.post.cooked, post.createdAt = datetime($params.post.created_at),
+    post.number = $params.post.post_number
+
+MERGE (user)-[:POSTED_CONTENT]->(post)
+MERGE (post)-[:PART_OF]->(topic)
+"""
+
+import_topic_query = """\
+MATCH (category:DiscourseCategory {id: $params.topic.category_id})
+
+MERGE (user:DiscourseUser {id: $params.topic.user_id })
+ON CREATE SET user.name = $params.topic.created_by.username,
+              user.avatarTemplate = $params.topic.created_by.avatar_template
+MERGE (topic:DiscourseTopic {id: $params.topic.id })
+SET topic.title = $params.topic.title,
+    topic.createdAt = datetime($params.topic.created_at),
+    topic.slug = $params.topic.slug,
+    topic.approved = $params.approved,
+    topic.rating = $params.rating,
+    topic.likeCount = toInteger($params.topic.like_count),
+    topic.views = toInteger($params.topic.views),
+    topic.replyCount = toInteger($params.topic.reply_count),
+    topic.categoryId = $params.topic.category_id
+
+
+MERGE (topic)-[:IN_CATEGORY]->(category)
+MERGE (user)-[:POSTED_CONTENT]->(topic)
+"""
+
+def import_posts_topics(request, context):
+    headers = request["headers"]
+
+    event_type = headers["X-Discourse-Event-Type"]
+    event = headers["X-Discourse-Event"]
+    print(f"Received {event_type}: {event}")
+
+    body = request["body"]
+    json_payload = json.loads(body)
+
+    if event_type == "topic" and json_payload["topic"]["archetype"] == "regular":
+        with db_driver.session() as session:
+            result = session.run(import_topic_query, {"params": json_payload})
+            print(result.summary().counters)
+
+    if event_type == "post" and json_payload["post"]["topic_archetype"] == "regular":
+        with db_driver.session() as session:
+            result = session.run(import_post_query, {"params": json_payload})
+            print(result.summary().counters)
+
+    return {"statusCode": 200, "body": "Got the event", "headers": {}}
+
+
 community_content_query = """\
 MERGE (user:DiscourseUser {id: $params.topic.user_id })
 SET user.name = $params.topic.created_by.username,
@@ -74,7 +139,7 @@ RETURN topic
 
 kudos_message = """
 Thanks for submitting!
- 
+
 I've added a tag that allows your blog to be displayed on the community home page!
 """
 
@@ -214,18 +279,18 @@ def user_events(request, context):
 import_twin4j_query = """\
     MERGE (twin4j:TWIN4j {date: datetime($date) })
     SET twin4j.image = $image, twin4j.summaryText = $summaryText, twin4j.link = $link
-    
+
     FOREACH(tag IN $allTheTags |
       MERGE (t:TWIN4jTag {tag: tag.tag, anchor: tag.anchor })
       MERGE (twin4j)-[:CONTAINS_TAG]->(t)
     )
-    
+
     WITH twin4j
     UNWIND $people AS person
     OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
     OPTIONAL MATCH (user:User) where user.id = toInteger(person.stackOverflowId)
     WITH coalesce(twitter, user) AS u, twin4j
-    
+
     CALL apoc.do.when(u is NOT NULL, 'MERGE (twin4j)-[:FEATURED]->(u)', '', {twin4j: twin4j, u: u}) YIELD value
     RETURN value
     """
@@ -443,7 +508,7 @@ def fetch_medium_posts(request, context):
     post_count = 0
     for entry in d.entries:
       post_count = post_count + 1
-      guid = entry.guid 
+      guid = entry.guid
       blog_author = entry.author
       blog_url = entry.link
       blog_title = entry.title
@@ -488,7 +553,7 @@ def update_topics(request, context):
     topics = [topic for topic in json_payload["topic_list"]["topics"]
               if not topic["pinned"]]
     print(topics)
- 
+
     set_update_topics({"params": topics})
 
 update_categories_subcategories_query = """\

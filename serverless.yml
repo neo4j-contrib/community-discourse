@@ -11,7 +11,7 @@ custom:
 provider:
   name: aws
   runtime: python3.6
-  timeout: 180
+  timeout: 30
   environment: ${file(env.yml):${self:custom.stage}}
   iamRoleStatements: # permissions for all of your functions can be set here
     - Effect: Allow
@@ -27,6 +27,11 @@ provider:
       Action:
         - "ssm:GetParameter"
       Resource: "arn:aws:ssm:*:715633473519:parameter/com.neo4j.graphacademy.*"
+    - Effect: 'Allow'
+      Action:
+        - "ses:SendEmail"
+      Resource:
+        "arn:aws:ses:us-east-1:715633473519:identity/mark.needham@neo4j.com"
 
 plugins:
   - serverless-python-requirements
@@ -38,6 +43,11 @@ functions:
       timeout: 30
       events:
         - http: POST CommunityContent
+  import-posts-topics:
+      name: Discourse-ImportPostsTopics
+      handler: handler.import_posts_topics
+      events:
+        - http: POST ImportPostsTopics
   user-events:
       name: Discourse-UserEventsWebHook
       handler: handler.user_events
@@ -72,6 +82,11 @@ functions:
       handler: handler.update_topics
       events:
         - schedule: rate(1 hour)
+  update-categories:
+      name: Discourse-UpdateCategories
+      handler: handler.update_categories
+      events:
+        - schedule: rate(1 hour)
   fetch-medium-posts:
       name: Discourse-FetchMediumPosts
       handler: handler.fetch_medium_posts
@@ -82,6 +97,11 @@ functions:
       handler: handler.post_medium_to_discourse
       events:
         - schedule: rate(5 minutes)
+  ninja-activity:
+    name: Discourse-NinjaActivity
+    handler: handler.ninja_activity
+    events:
+      - schedule: cron(15 14 ? * 6 *)
 
 package:
   exclude:
