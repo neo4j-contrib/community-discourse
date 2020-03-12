@@ -299,7 +299,7 @@ def edu_discourse_users_query(tx):
     query = """
     MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)-[r2:DISCOURSE_ACCOUNT]-(discourse:DiscourseUser)
     WHERE edu.status = 'APPROVED'
-    RETURN discourse.name as discourse_users
+    RETURN DISTINCT(discourse.name) as discourse_users
     """
     return tx.run(query)
 
