@@ -238,76 +238,69 @@ def edu_discourse_users_query(tx):
     """
     return tx.run(query)
 
-def assign_edu_group():
+def assign_edu_group(request, context):
     counter = 0
+    group = ''
     uri = f"https://community.neo4j.com/groups/49/members.json"
 
     with db_driver.session() as session:
-        #result = session.run(edu_discourse_users_query, {})
-        result = session.read_transaction(edu_discourse_users_query)
+      result = session.run(edu_discourse_users_query, {})
 
-        for record in result:
-            group = group + ',' + record
-            counter = counter + 1
+      for record in result:
+        #print(record)
+        if counter != 0:
+            group +=  ','
+        group +=  record['discourse_users']
+        counter = counter + 1
 
-            payload = {
-                "api_key": discourse_api_key,
-                "api_user_name": discourse_api_user,
-                "usernames": group
-            }
+    payload = {
+        "api_key": discourse_api_key,
+        "api_user_name": discourse_api_user,
+        "usernames": group
+    }
+    print(payload)
 
-            print(payload)
+    m = MultipartEncoder(fields=payload)
+    r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+    return "Added %d users to Edu group" % (counter)
 
-            m = MultipartEncoder(fields=payload)
-            r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
-            print(r)
-            print("Added %d users to Edu group" % (counter))
+edu_discourse_invite_query = """
+MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
+WHERE edu.status = 'APPROVED'
+AND NOT exists(user.discourseInviteSent)
+AND NOT exists((user)-[:DISCOURSE_ACCOUNT]-(:DiscourseUser))
+RETURN DISTINCT(user.email) as edu_email
+"""
 
-def edu_discourse_invite_query(tx):
-    query = """
-    MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
-    WHERE edu.status = 'APPROVED'
-    AND NOT exists(user.discourseInviteSent)
-    AND NOT exists((user)-[:DISCOURSE_ACCOUNT]-(:DiscourseUser))
-    RETURN DISTINCT(user.email) as edu_email
-    """
-    return tx.run(query)
+edu_discourse_invited_update = """
+WITH $params.result as usersInvited
+MATCH (user:User)-[:SUBMITTED_APPLICATION]->(:EduApplication)
+WHERE user.email IN usersInvited
+ SET user.discourseInviteSent = datetime()
+RETURN count(user)
+"""
 
-def edu_discourse_invited_update(tx):
-    query = """
-    WITH $result as usersInvited
-    MATCH (user:User)-[:SUBMITTED_APPLICATION]->(:EduApplication)
-    WHERE user.email IN usersInvited
-     SET user.discourseInviteSent = datetime()
-    RETURN count(user)
-    """
-    return tx.run(query)
-
-def send_edu_discourse_invites():
+def send_edu_discourse_invites(request, context):
     uri = f"https://community.neo4j.com/invites"
 
     with db_driver.session() as session:
         #result = session.run(edu_discourse_invite_query, {})
         result = session.read_transaction(edu_discourse_invite_query)
 
-        for record in result:
-            payload = {
-                "api_key": discourse_api_key,
-                "api_user_name": discourse_api_user,
-                "email": record,
-                "group_names": "Neo4j-Educators",
-                "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
-            }
+      for record in result:
+        payload = {
+            "api_key": discourse_api_key,
+            "api_user_name": discourse_api_user,
+            "email": record,
+            "group_names": "Neo4j-Educators",
+            "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
+        }
+        print(payload)
 
-            print(payload)
+        m = MultipartEncoder(fields=payload)
+        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
 
-            m = MultipartEncoder(fields=payload)
-            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
-            print(r)
-
-            #updatedUsers = session.run(edu_discourse_invited_update, {params: result})
-            updatedUsers = session.read_transaction(edu_discourse_invited_update, result=result)
-
+        updatedUsers = session.run(edu_discourse_invited_update, {"params": result})
         return "Updated %d users invited" % (updatedUsers)
 
 def import_twin4j(request, context):
@@ -486,3 +479,185 @@ def update_topics(request, context):
     print(topics)
  
     set_update_topics({"params": topics})
+
+update_categories_subcategories_query = """\
+UNWIND $params AS event
+MERGE (category:DiscourseCategory {id: event.id})
+SET category.name = event.name, category.description = event.description
+WITH category, event
+UNWIND event.subcategory_ids AS subCategoryId
+MERGE (subCategory:DiscourseCategory {id: subCategoryId})
+MERGE (subCategory)-[:CHILD]->(category)
+"""
+
+update_categories_query = """\
+UNWIND $params AS event
+MERGE (category:DiscourseCategory {id: event.id})
+SET category.name = event.name, category.description = event.description
+"""
+
+def update_categories_tx_fn(tx, params):
+    tx.run(tx, params=params)
+
+def update_categories(request, context):
+    uri = f"https://community.neo4j.com/categories.json"
+
+    payload = {
+        "api_key": discourse_api_key,
+        "api_user_name": discourse_api_user
+    }
+
+    r = requests.get(uri, data=payload)
+    response = r.json()
+    print(len(response["category_list"]["categories"]))
+
+    with db_driver.session() as session:
+        categories = response["category_list"]["categories"]
+        result = session.run(update_categories_subcategories_query, params=categories)
+        print(result.summary().counters)
+
+    r = requests.get("https://community.neo4j.com/site.json", data=payload)
+    response = r.json()
+    categories = response["categories"]
+
+    with db_driver.session() as session:
+        result = session.run(update_categories_query, params=categories)
+        print(result.summary().counters)
+
+ninjas_so_query = """\
+WITH $now as currentMonth
+Match (u:User:StackOverflow)
+match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
+WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
+with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
+with currentMonth, week, u.name as user, count(*) as total, sum(case when a.is_accepted then 1 else 0 end) as accepted
+ORDER BY total DESC
+return currentMonth, user, collect([week,total,accepted]) as weekly
+"""
+
+
+ninajs_discourse_query = """\
+MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
+WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
+with *, post.createdAt.week as week
+with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
+ORDER BY week, total DESC
+WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
+WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
+RETURN u.name AS user, email,
+       apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
+       apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
+ORDER BY size(keys(weekly)) DESC
+"""
+
+def ninja_activity(request, context):
+    now = datetime.datetime.now()
+    with db_driver.session() as session:
+        params = {"year": now.year, "month": now.month }
+        result = session.run(ninajs_discourse_query, params)
+
+        discourse_header = result.keys()
+        discourse_rows = [row.values() for row in result]
+
+        params = {"now": now.strftime("%Y-%m")}
+        result = session.run(ninjas_so_query, params)
+
+        so_header = result.keys()
+        so_rows = [row.values() for row in result]
+
+        t = Template("""\
+            <html>
+            <head>
+                <style>
+                #customers {
+                font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+                border-collapse: collapse;
+                width: 100%;
+                }
+
+                #customers td, #customers th {
+                border: 1px solid #ddd;
+                padding: 8px;
+                }
+
+                #customers tr:nth-child(even){background-color: #f2f2f2;}
+
+                #customers tr:hover {background-color: #ddd;}
+
+                #customers th {
+                padding-top: 12px;
+                padding-bottom: 12px;
+                text-align: left;
+                background-color: #4291d6;
+                color: white;
+                }
+                </style>
+            </head>
+            <body>
+            <p>
+                Hi Karin,
+            </p>
+            <p>
+                The Neo4j Ninjas have been busy. See below for the biggest contributors this month.
+            </p>
+
+            <p>
+                Cheers, Greta the Graph Giraffe
+            </p>
+
+            <h2>Discourse Activity</h2>
+            <table id="customers">
+                <tr>
+                {% for column in discourse_header %}
+                    <th>{{column}}</th>
+                {% endfor %}
+                </tr>
+                {% for row in discourse_rows %}
+                    <tr>
+                        {% for column in row %}
+                            <td>{{ column }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </table>
+
+            <h2>StackOverflow Activity</h2>
+            <table id="customers">
+                <tr>
+                {% for column in so_header %}
+                    <th>{{column}}</th>
+                {% endfor %}
+                </tr>
+                {% for row in so_rows %}
+                    <tr>
+                        {% for column in row %}
+                            <td>{{ column }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </table>
+            </body>
+            </html>""")
+        message = t.render(
+            discourse_rows = discourse_rows,
+            discourse_header=discourse_header,
+            so_header = so_header,
+            so_rows = so_rows
+            )
+
+        client = boto3.client('ses')
+        response = client.send_email(
+            Source="mark.needham@neo4j.com",
+            Destination={"ToAddresses": ["karinwolok1@gmail.com", "m.h.needham@gmail.com"]},
+            # Destination={"ToAddresses": ["m.h.needham@gmail.com"]},
+            Message={
+                "Body": {
+                    "Html": {
+                        "Data": message
+                    }
+                },
+                "Subject": {
+                    "Data": f"Ninja Activity on {now.strftime('%d %b %Y at %H:%M')}"
+                }
+            })
+        print(response)
