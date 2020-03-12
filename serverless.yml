@@ -51,7 +51,7 @@ functions:
       events:
         - schedule: rate(24 hours)
   send-edu-discourse-invites:
-      name: Discourse-SendEduDiscourseWebHook
+      name: Discourse-SendEduDiscourse
       handler: handler.send_edu_discourse_invites
       timeout: 30
       events:
