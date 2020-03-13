@@ -375,7 +375,7 @@ def send_edu_discourse_invites(request, context):
         r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
         print("Invited %d Edu users to Discourse" % (counter))
 
-        updatedUsers = session.read_transaction(edu_discourse_invited_update, usersInvited)
+        updatedUsers = session.write_transaction(edu_discourse_invited_update, usersInvited)
         for record in updatedUsers:
             print("Updated %d users invited" % (record['userCount']))
 
