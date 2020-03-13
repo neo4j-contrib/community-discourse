@@ -295,11 +295,13 @@ import_twin4j_query = """\
     RETURN value
     """
 
-edu_discourse_users_query = """
-MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)-[r2:DISCOURSE_ACCOUNT]-(discourse:DiscourseUser)
-WHERE edu.status = 'APPROVED'
-RETURN discourse.name as discourse_users
-"""
+def edu_discourse_users_query(tx):
+    query = """
+    MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)-[r2:DISCOURSE_ACCOUNT]-(discourse:DiscourseUser)
+    WHERE edu.status = 'APPROVED'
+    RETURN DISTINCT(discourse.name) as discourse_users
+    """
+    return tx.run(query)
 
 def assign_edu_group(request, context):
     counter = 0
@@ -307,10 +309,9 @@ def assign_edu_group(request, context):
     uri = f"https://community.neo4j.com/groups/49/members.json"
 
     with db_driver.session() as session:
-      result = session.run(edu_discourse_users_query, {})
+      result = session.read_transaction(edu_discourse_users_query)
 
       for record in result:
-        #print(record)
         if counter != 0:
             group +=  ','
         group +=  record['discourse_users']
@@ -325,48 +326,58 @@ def assign_edu_group(request, context):
 
     m = MultipartEncoder(fields=payload)
     r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
-    return "Added %d users to Edu group" % (counter)
+    print("Added %d users to Edu group" % (counter))
 
-edu_discourse_invite_query = """
-MATCH (edu:EduApplication)-[r:SUBMITTED_APPLICATION]-(user:User)
-WHERE edu.status = 'APPROVED'
-AND NOT exists(user.discourseInviteSent)
-AND NOT exists((user)-[:DISCOURSE_ACCOUNT]-(:DiscourseUser))
-RETURN DISTINCT(user.email) as edu_email
-"""
+def edu_discourse_invite_query(tx):
+    query = """
+    MATCH (edu:EduApplication)<-[r:SUBMITTED_APPLICATION]-(user:User)
+    WHERE edu.status = 'APPROVED'
+    AND NOT exists(user.discourseInviteSent)
+    AND NOT exists((user)-[:DISCOURSE_ACCOUNT]->(:DiscourseUser))
+    RETURN DISTINCT(user.email) as edu_email
+    """
+    return tx.run(query)
 
-edu_discourse_invited_update = """
-WITH $params.result as usersInvited
-MATCH (user:User)-[:SUBMITTED_APPLICATION]->(:EduApplication)
-WHERE user.email IN usersInvited
- SET user.discourseInviteSent = datetime()
-RETURN count(user)
-"""
+def edu_discourse_invited_update(tx, usersInvited):
+    query = """
+    UNWIND {usersInvited} as invitedUser
+    MATCH (user:User {email: invitedUser})-[:SUBMITTED_APPLICATION]->(edu:EduApplication)
+    WHERE edu.status = 'APPROVED'
+    AND NOT exists(user.discourseInviteSent)
+    AND NOT exists((user)-[:DISCOURSE_ACCOUNT]->(:DiscourseUser))
+    WITH distinct(user)
+     SET user.discourseInviteSent = datetime()
+    RETURN count(user) as userCount
+    """
+    return tx.run(query, usersInvited=usersInvited)
 
-def send_edu_discourse_invites(params):
+def send_edu_discourse_invites(request, context):
+    counter = 0
+    usersInvited = []
     uri = f"https://community.neo4j.com/invites"
 
     with db_driver.session() as session:
-      result = session.run(edu_discourse_invite_query, {})
-
-      for record in result:
-        payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
-            "email": record,
-            "group_names": "Neo4j-Educators",
-            "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
-        }
-
-        print(payload)
+        results = session.read_transaction(edu_discourse_invite_query)
+        
+        for record in results:
+            payload = {
+                "api_key": discourse_api_key,
+                "api_user_name": discourse_api_user,
+                "email": record['edu_email'],
+                "group_names": "Neo4j-Educators",
+                "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
+            }
+            print(payload)
+            usersInvited.append(record['edu_email'])
+            counter += 1
 
         m = MultipartEncoder(fields=payload)
         r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
-        print(r)
+        print("Invited %d Edu users to Discourse" % (counter))
 
-        updatedUsers = session.run(edu_discourse_invited_update, {params: result})
-
-        return "Updated %d users invited" % (updatedUsers)
+        updatedUsers = session.read_transaction(edu_discourse_invited_update, usersInvited)
+        for record in updatedUsers:
+            print("Updated %d users invited" % (record['userCount']))
 
 def import_twin4j(request, context):
     twin4j_posts = requests.get("https://neo4j.com/wp-json/wp/v2/posts?tags=3201").json()
