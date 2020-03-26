@@ -207,14 +207,12 @@ def community_content(request, context):
         uri = f"https://community.neo4j.com/posts.json"
 
         payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
             "topic_id": str(json_payload["topic"]["id"]),
             "raw": kudos_message
         }
 
         m = MultipartEncoder(fields=payload)
-        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
         print(r)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
@@ -318,14 +316,12 @@ def assign_edu_group(request, context):
         counter = counter + 1
 
     payload = {
-        "api_key": discourse_api_key,
-        "api_user_name": discourse_api_user,
         "usernames": group
     }
     print(payload)
 
     m = MultipartEncoder(fields=payload)
-    r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+    r = requests.put(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     print("Added %d users to Edu group" % (counter))
 
 def edu_discourse_invite_query(tx):
@@ -361,8 +357,6 @@ def send_edu_discourse_invites(request, context):
         
         for record in results:
             payload = {
-                "api_key": discourse_api_key,
-                "api_user_name": discourse_api_user,
                 "email": record['edu_email'],
                 "group_names": "Neo4j-Educators",
                 "custom_message": "The Neo4j Educator Program includes access to a private channel on our Community Site where you can ask questions, share resources, and learn from others. Join us!"
@@ -372,7 +366,7 @@ def send_edu_discourse_invites(request, context):
             counter += 1
 
         m = MultipartEncoder(fields=payload)
-        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
         print("Invited %d Edu users to Discourse" % (counter))
 
         updatedUsers = session.write_transaction(edu_discourse_invited_update, usersInvited)
@@ -448,13 +442,11 @@ def update_profile(request, context):
         uri = f"https://community.neo4j.com/users/{username}.json"
 
         payload = {
-            "api_key": discourse_api_key,
-            "api_user_name": discourse_api_user,
             "bio_raw": bio,
         }
 
         m = MultipartEncoder(fields=payload)
-        r = requests.put(uri, data=m, headers={'Content-Type': m.content_type})
+        r = requests.put(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
         print(r)
 
         return {"statusCode": 200, "body": "Updated user bio", "headers": {}}
@@ -540,7 +532,7 @@ def post_topic_to_discourse(category, username, title, body, published_date):
     post_data['raw'] = body
     post_data['created_at'] = published_date
     params = "api_key=%s&api_username=%s" % (discourse_root_api_key, username)
-    r = requests.post("https://community.neo4j.com/posts.json?%s" % (params), json=post_data)
+    r = requests.post("https://community.neo4j.com/posts.json?%s" % (params), json=post_data, headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     print(r.content)
     return json.loads(r.content)
 
@@ -583,7 +575,7 @@ def update_categories(request, context):
         "api_user_name": discourse_api_user
     }
 
-    r = requests.get(uri, data=payload)
+    r = requests.get(uri, headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     response = r.json()
     print(len(response["category_list"]["categories"]))
 
@@ -592,7 +584,7 @@ def update_categories(request, context):
         result = session.run(update_categories_subcategories_query, params=categories)
         print(result.summary().counters)
 
-    r = requests.get("https://community.neo4j.com/site.json", data=payload)
+    r = requests.get("https://community.neo4j.com/site.json", headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     response = r.json()
     categories = response["categories"]
 
