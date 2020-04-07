@@ -102,6 +102,11 @@ functions:
     handler: handler.ninja_activity
     events:
       - schedule: cron(15 14 ? * 6 *)
+  ninja-all:
+    name: Discourse-API-AllNinjas
+    handler: handler.api_all_ninjas
+    events:
+      - http: GET AllNinjas
 
 package:
   exclude:

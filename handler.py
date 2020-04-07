@@ -1,19 +1,17 @@
+import datetime
 import json
-import os
 import re
-import requests
-import feedparser
-import boto3
 
+import boto3
+import feedparser
+import flask
+import requests
 from bs4 import BeautifulSoup
+from jinja2 import Template
 from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
-from util.encryption import decrypt_value_str, encrypt_value
-
 from retrying import retry
-import random
-import datetime
-from jinja2 import Template
+from dateutil import parser
 
 ssmc = boto3.client('ssm')
 
@@ -36,6 +34,8 @@ discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
 discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
 
 discourse_root_api_key =  get_ssm_param('com.neo4j.devrel.discourse.rootapikey')
+
+app = flask.Flask('feedback form')
 
 
 # {'topic':
@@ -373,6 +373,7 @@ def send_edu_discourse_invites(request, context):
         for record in updatedUsers:
             print("Updated %d users invited" % (record['userCount']))
 
+
 def import_twin4j(request, context):
     twin4j_posts = requests.get("https://neo4j.com/wp-json/wp/v2/posts?tags=3201").json()
 
@@ -495,6 +496,7 @@ SET
   mp.discourse_id = $discourseId
 """
 
+
 def fetch_medium_posts(request, context):
     d = feedparser.parse('https://medium.com/feed/neo4j')
     post_count = 0
@@ -512,6 +514,7 @@ def fetch_medium_posts(request, context):
         result = session.run(store_medium_post_query, params)
         result.consume()
 
+
 def post_medium_to_discourse(request, context):
     counter = 0
     with db_driver.session() as session:
@@ -525,6 +528,7 @@ def post_medium_to_discourse(request, context):
           update_res.consume()
     return "Posted %d posts to discourse" % (counter)
 
+
 def post_topic_to_discourse(category, username, title, body, published_date):
     post_data = {}
     post_data['title'] = title
@@ -535,6 +539,7 @@ def post_topic_to_discourse(category, username, title, body, published_date):
     r = requests.post("https://community.neo4j.com/posts.json?%s" % (params), json=post_data, headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     print(r.content)
     return json.loads(r.content)
+
 
 def update_topics(request, context):
     uri = "https://community.neo4j.com/c/68.json"
@@ -564,8 +569,10 @@ MERGE (category:DiscourseCategory {id: event.id})
 SET category.name = event.name, category.description = event.description
 """
 
+
 def update_categories_tx_fn(tx, params):
     tx.run(tx, params=params)
+
 
 def update_categories(request, context):
     uri = f"https://community.neo4j.com/categories.json"
@@ -592,6 +599,7 @@ def update_categories(request, context):
         result = session.run(update_categories_query, params=categories)
         print(result.summary().counters)
 
+
 ninjas_so_query = """\
 WITH $now as currentMonth
 Match (u:User:StackOverflow)
@@ -604,7 +612,7 @@ return currentMonth, user, collect([week,total,accepted]) as weekly
 """
 
 
-ninajs_discourse_query = """\
+ninjas_discourse_query = """\
 MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
 WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
 with *, post.createdAt.week as week
@@ -618,11 +626,12 @@ RETURN u.name AS user, email,
 ORDER BY size(keys(weekly)) DESC
 """
 
+
 def ninja_activity(request, context):
     now = datetime.datetime.now()
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
-        result = session.run(ninajs_discourse_query, params)
+        result = session.run(ninjas_discourse_query, params)
 
         discourse_header = result.keys()
         discourse_rows = [row.values() for row in result]
@@ -729,3 +738,59 @@ def ninja_activity(request, context):
                 }
             })
         print(response)
+
+ninjas_api_so_query = """\
+WITH $now as currentMonth
+Match (u:User:StackOverflow)
+match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
+WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
+with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
+with currentMonth, week, u.name as user, count(*) as total, sum(case when a.is_accepted then 1 else 0 end) as accepted
+ORDER BY total DESC
+return currentMonth, user, collect([week,total,accepted]) as weekly
+"""
+
+
+ninjas_api_discourse_query = """\
+MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
+WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
+with *, post.createdAt.week as week
+with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
+ORDER BY week, total DESC
+WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
+WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
+RETURN u.name AS user, email,
+       apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
+       apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
+ORDER BY size(keys(weekly)) DESC
+"""
+
+def api_all_ninjas(event, context):
+    print(event)
+    qs = event.get("multiValueQueryStringParameters")
+    print(qs)
+    if qs and qs.get("date"):
+        now = parser.parse(qs["date"][0])
+    else:
+        now = datetime.datetime.now().replace(day=1)
+
+    print(f"Retrieving Ninja activities for {now}")
+
+    with db_driver.session() as session:
+        params = {"year": now.year, "month": now.month }
+        result = session.run(ninjas_api_discourse_query, params)
+
+        discourse_rows = [row.data() for row in result]
+
+        params = {"now": now.strftime("%Y-%m")}
+        result = session.run(ninjas_api_so_query, params)
+
+        so_rows = [row.data() for row in result]
+
+    return {"statusCode": 200, "body": json.dumps({
+        "discourse": discourse_rows,
+        "so": so_rows
+    }), "headers": {
+        "Content-Type": "application/json",
+        'Access-Control-Allow-Origin': '*'
+    }}
