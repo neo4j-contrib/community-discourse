@@ -7,6 +7,15 @@ custom:
   kmsKeyArn: ${file(env.yml):${self:custom.stage}.KEY_ARN}
   pythonRequirements:
     dockerizePip: non-linux
+  BadgesTopic:
+    Fn::Join:
+      - ":"
+      - - arn
+        - aws
+        - sns
+        - Ref: AWS::Region
+        - Ref: AWS::AccountId
+        - Discourse-Badges
 
 provider:
   name: aws
@@ -32,6 +41,12 @@ provider:
         - "ses:SendEmail"
       Resource:
         "arn:aws:ses:us-east-1:715633473519:identity/mark.needham@neo4j.com"
+    - Effect: 'Allow'
+      Action:
+        - "sns:Publish"
+      Resource:
+        - ${self:custom.BadgesTopic}
+
 
 plugins:
   - serverless-python-requirements
@@ -107,6 +122,14 @@ functions:
     handler: handler.api_all_ninjas
     events:
       - http: GET AllNinjas
+  badges:
+    name: Discourse-AssignBadges
+    handler: handler.assign_badges
+    events:
+      - sns:
+          topicName: Discourse-Badges
+          displayName: Topic to handle assigning of badges
+
 
 package:
   exclude:

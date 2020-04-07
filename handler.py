@@ -264,12 +264,25 @@ def user_events(request, context):
         print("User destroyed so no longer need to care about user")
         return {"statusCode": 200, "body": "It was just a user destruction event -- no action as dont know reason", "headers": {}}
 
-
     body = request["body"]
     json_payload = json.loads(body)
     print(json_payload)
 
     set_user_events({"params": json_payload})
+
+    context_parts = context.invoked_function_arn.split(':')
+    topic_name = "Discourse-Badges"
+    region = context_parts[3]
+    account_id = context_parts[4]
+    topic_arn = f"arn:aws:sns:{region}:{account_id}:{topic_name}"
+
+    sns = boto3.client('sns')
+    message = {
+        "externalId": json_payload["user"]["external_id"],
+        "userName": json_payload["user"]["username"],
+        "badgeId": "103"
+    }
+    sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
 
     return {"statusCode": 200, "body": "Updated user", "headers": {}}
 
@@ -794,3 +807,42 @@ def api_all_ninjas(event, context):
         "Content-Type": "application/json",
         'Access-Control-Allow-Origin': '*'
     }}
+
+
+did_user_pass_query = """
+MATCH path = (user:User {auth0_key: $externalId})-[:TOOK]->(exam)
+WHERE exists(exam.certificatePath) AND exam.passed
+WITH count(*) AS count
+RETURN CASE WHEN count > 0 THEN true ELSE false END AS certified
+"""
+
+
+def assign_badges(event, context):
+    for record in event["Records"]:
+        print(record)
+
+        message = json.loads(record["Sns"]["Message"])
+        external_id = message["externalId"]
+        badge_id = message["badgeId"]
+        user_name = message["userName"]
+
+        # Check if the user earnt the badge
+        with db_driver.session() as session:
+            is_certified = session.run(did_user_pass_query, {"externalId": external_id}).single()["certified"]
+
+        if is_certified:
+            print("User is certified, assigned badge")
+            uri = f"https://community.neo4j.com/user_badges.json"
+
+            payload = {
+                "api_key": discourse_api_key,
+                "api_user_name": discourse_api_user,
+                "username": user_name,
+                "badge_id": badge_id
+            }
+
+            print(payload)
+
+            m = MultipartEncoder(fields=payload)
+            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
+            print(r)
