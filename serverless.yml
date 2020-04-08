@@ -129,6 +129,9 @@ functions:
       - sns:
           topicName: Discourse-Badges
           displayName: Topic to handle assigning of badges
+  missing-badges:
+    name: Discourse-MissingBadges
+    handler: handler.missing_badges
 
 
 package:

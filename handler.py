@@ -771,10 +771,11 @@ with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
 ORDER BY week, total DESC
 WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
-WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
-RETURN u.name AS user, email,
-       apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
-       apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
+WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | u.screenName][0] AS discourseUser, weekly, categories
+WITH u.name AS user, discourseUser, 
+     apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
+     apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
+RETURN user,discourseUser, weekly, categories       
 ORDER BY size(keys(weekly)) DESC
 """
 
@@ -846,3 +847,32 @@ def assign_badges(event, context):
             m = MultipartEncoder(fields=payload)
             r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
             print(r)
+
+
+users_who_passed_query = """
+MATCH (user:User)-[:TOOK]->(exam)
+WHERE exists(exam.certificatePath) AND exam.passed
+MATCH (user)-[:DISCOURSE_ACCOUNT]->(account)
+RETURN user.auth0_key AS externalId, account.name AS userName
+"""
+
+
+def missing_badges(event, context):
+    context_parts = context.invoked_function_arn.split(':')
+    topic_name = "Discourse-Badges"
+    region = context_parts[3]
+    account_id = context_parts[4]
+    topic_arn = f"arn:aws:sns:{region}:{account_id}:{topic_name}"
+
+    sns = boto3.client('sns')
+
+    with db_driver.session() as session:
+        rows = session.run(users_who_passed_query)
+        for row in rows:
+            print(row)
+            message = {
+                "externalId": row["externalId"],
+                "userName": row["userName"],
+                "badgeId": "103"
+            }
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
