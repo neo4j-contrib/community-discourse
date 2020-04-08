@@ -2,7 +2,7 @@ store_badges_query = """
 MATCH (discourseUser:DiscourseUser {id: $id})
 SET discourseUser.lastBadgeRefresh = datetime()
 WITH discourseUser
-UNWIND $badges AS badge
+    UNWIND $badges AS badge
 MERGE (discourseBadge:DiscourseBadge {id: badge.id})
 ON CREATE SET discourseBadge.name = badge.name, discourseBadge.description = badge.description
 MERGE (discourseUser)-[:HAS_BADGE]->(discourseBadge)
@@ -31,6 +31,7 @@ RETURN DISTINCT user.auth0_key AS externalId,
        account.id AS discourseId, 
        [(account)-[:HAS_BADGE]->(badge) | badge.name] AS badges
 ORDER BY size(badges) DESC
+LIMIT 100
 """
 
 did_user_pass_query = """

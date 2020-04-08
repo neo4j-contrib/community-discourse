@@ -1,6 +1,7 @@
 import datetime
 import json
 import re
+import logging
 
 import boto3
 import feedparser
@@ -17,6 +18,9 @@ import util.queries as q
 
 DISCOURSE_BADGES_TOPIC = "Discourse-Badges"
 STORE_BADGES_TOPIC = "Store-Discourse-Badges"
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
 def construct_topic_arn(context, topic):
@@ -439,11 +443,6 @@ def update_categories_tx_fn(tx, params):
 def update_categories(request, context):
     uri = f"https://community.neo4j.com/categories.json"
 
-    payload = {
-        "api_key": discourse_api_key,
-        "api_user_name": discourse_api_user
-    }
-
     r = requests.get(uri, headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     response = r.json()
     print(len(response["category_list"]["categories"]))
@@ -578,13 +577,12 @@ def ninja_activity(request, context):
 def api_all_ninjas(event, context):
     print(event)
     qs = event.get("multiValueQueryStringParameters")
-    print(qs)
     if qs and qs.get("date"):
         now = parser.parse(qs["date"][0])
     else:
         now = datetime.datetime.now().replace(day=1)
 
-    print(f"Retrieving Ninja activities for {now}")
+    logger.info(f"Retrieving Ninja activities for {now}")
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
@@ -611,7 +609,7 @@ def assign_badges(event, context):
     topic_arn = construct_topic_arn(context, STORE_BADGES_TOPIC)
 
     for record in event["Records"]:
-        print(record)
+        logger.info(f"Record: {record}")
 
         message = json.loads(record["Sns"]["Message"])
         external_id = message["externalId"]
@@ -624,28 +622,20 @@ def assign_badges(event, context):
             is_certified = session.run(q.did_user_pass_query, {"externalId": external_id}).single()["certified"]
 
         if is_certified:
-            print("User is certified, assigned badge")
+            logger.info(f"user: {user_name}, discourseId: {discourse_id}: User is certified, assigned badge")
             uri = f"https://community.neo4j.com/user_badges.json"
 
             payload = {
-                "api_key": discourse_api_key,
-                "api_user_name": discourse_api_user,
                 "username": user_name,
                 "badge_id": badge_id
             }
 
-            print(payload)
-
             m = MultipartEncoder(fields=payload)
-            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
-            print(r)
+            r = requests.post(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
+            print("user", user_name, "discourseId", discourse_id, "response", r, r.json())
 
             message = {"discourseId": discourse_id, "userName": user_name}
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
-
-
-def store_badges_tx(tx, params):
-    return tx.run(q.store_badges_query, params)
 
 
 def find_users_badges(event, context):
@@ -655,7 +645,7 @@ def find_users_badges(event, context):
     with db_driver.session() as session:
         rows = session.run(q.users_query)
         for row in rows:
-            print(row)
+            logger.info(f"row: {row}")
             username = row["userName"]
             discourse_id = row["discourseId"]
 
@@ -663,9 +653,13 @@ def find_users_badges(event, context):
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
 
 
+def store_badges_tx(tx, params):
+    return tx.run(q.store_badges_query, params)
+
+
 def store_badges(event, context):
     for record in event["Records"]:
-        print(record)
+        logger.info(f"Record: {record}")
 
         message = json.loads(record["Sns"]["Message"])
         discourse_id = message["discourseId"]
@@ -674,11 +668,11 @@ def store_badges(event, context):
         r = requests.get(f"https://community.neo4j.com/user-badges/{username}.json")
         badges = r.json().get("badges")
         badges = badges if badges else []
-        print("user", username, "discourseId" , discourse_id, "badges", badges)
+        logger.info(f"user: {username}, discourseId: {discourse_id}, badgers: {badges}")
         with db_driver.session() as session:
             params = {"id": discourse_id, "badges": badges}
             result = session.write_transaction(store_badges_tx, params)
-            print("params", params, "result", result.summary().counters)
+            logger.info(f"params: {params}, result: {result.summary().counters}")
 
 
 def missing_badges(event, context):
@@ -688,7 +682,7 @@ def missing_badges(event, context):
     with db_driver.session() as session:
         rows = session.run(q.users_who_passed_query_but_dont_have_badge)
         for row in rows:
-            print(row)
+            logger.info(f"row: {row}")
             message = {
                 "externalId": row["externalId"],
                 "userName": row["userName"],
