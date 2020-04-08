@@ -16,6 +16,15 @@ custom:
         - Ref: AWS::Region
         - Ref: AWS::AccountId
         - Discourse-Badges
+  StoreBadgesTopic:
+    Fn::Join:
+      - ":"
+      - - arn
+        - aws
+        - sns
+        - Ref: AWS::Region
+        - Ref: AWS::AccountId
+        - Store-Discourse-Badges
 
 provider:
   name: aws
@@ -46,6 +55,11 @@ provider:
         - "sns:Publish"
       Resource:
         - ${self:custom.BadgesTopic}
+    - Effect: 'Allow'
+      Action:
+        - "sns:Publish"
+      Resource:
+        - ${self:custom.StoreBadgesTopic}
 
 
 plugins:
@@ -132,6 +146,18 @@ functions:
   missing-badges:
     name: Discourse-MissingBadges
     handler: handler.missing_badges
+  find-users-badges:
+    name: Discourse-FindUsersAndBadges
+    handler: handler.find_users_badges
+    events:
+      - schedule: rate(1 minute)
+  store-badges:
+    name: Discourse-StoreBadges
+    handler: handler.store_badges
+    events:
+      - sns:
+          topicName: Store-Discourse-Badges
+          displayName: Topic to handle storing badges in Neo4j
 
 
 package:

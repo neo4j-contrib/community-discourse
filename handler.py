@@ -13,7 +13,18 @@ from requests_toolbelt import MultipartEncoder
 from retrying import retry
 from dateutil import parser
 
-ssmc = boto3.client('ssm')
+import util.queries as q
+
+DISCOURSE_BADGES_TOPIC = "Discourse-Badges"
+STORE_BADGES_TOPIC = "Store-Discourse-Badges"
+
+
+def construct_topic_arn(context, topic):
+    context_parts = context.invoked_function_arn.split(':')
+    region = context_parts[3]
+    account_id = context_parts[4]
+    return f"arn:aws:sns:{region}:{account_id}:{topic}"
+
 
 def get_ssm_param(key):
   resp = ssmc.get_parameter(
@@ -22,6 +33,9 @@ def get_ssm_param(key):
   )
   return resp['Parameter']['Value']
 
+
+ssmc = boto3.client('ssm')
+app = flask.Flask('feedback form')
 discourse_blog_category_id = 122
 
 host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
@@ -35,9 +49,6 @@ discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
 
 discourse_root_api_key =  get_ssm_param('com.neo4j.devrel.discourse.rootapikey')
 
-app = flask.Flask('feedback form')
-
-
 # {'topic':
 #      {'tags': ['kudos-4'],
 #       'id': 1241, 'title': 'Boltalyzer', 'fancy_title': 'Boltalyzer', 'posts_count': 1, 'created_at': '2018-09-06T21:42:52.784Z', 'views': 224,
@@ -50,45 +61,6 @@ app = flask.Flask('feedback form')
 #       'created_by': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'},
 #       'last_poster': {'id': 10, 'username': 'david.allen', 'name': 'M. David Allen', 'avatar_template': '/user_avatar/community.neo4j.com/david.allen/{size}/11_2.png'}}}
 
-import_post_query = """\
-MERGE (user:DiscourseUser {id: $params.post.user_id })
-ON CREATE SET user.name = $params.post.username,
-    user.avatarTemplate = $params.post.avatar_template
-
-MERGE (topic:DiscourseTopic {id: $params.post.topic_id })
-SET topic.title = $params.post.topic_title, topic.slug = $params.post.topic_slug
-
-MERGE (user)-[:POSTED_CONTENT]->(topic)
-
-MERGE (post:DiscoursePost {id: $params.post.id})
-SET post.text = $params.post.cooked, post.createdAt = datetime($params.post.created_at),
-    post.number = $params.post.post_number
-
-MERGE (user)-[:POSTED_CONTENT]->(post)
-MERGE (post)-[:PART_OF]->(topic)
-"""
-
-import_topic_query = """\
-MATCH (category:DiscourseCategory {id: $params.topic.category_id})
-
-MERGE (user:DiscourseUser {id: $params.topic.user_id })
-ON CREATE SET user.name = $params.topic.created_by.username,
-              user.avatarTemplate = $params.topic.created_by.avatar_template
-MERGE (topic:DiscourseTopic {id: $params.topic.id })
-SET topic.title = $params.topic.title,
-    topic.createdAt = datetime($params.topic.created_at),
-    topic.slug = $params.topic.slug,
-    topic.approved = $params.approved,
-    topic.rating = $params.rating,
-    topic.likeCount = toInteger($params.topic.like_count),
-    topic.views = toInteger($params.topic.views),
-    topic.replyCount = toInteger($params.topic.reply_count),
-    topic.categoryId = $params.topic.category_id
-
-
-MERGE (topic)-[:IN_CATEGORY]->(category)
-MERGE (user)-[:POSTED_CONTENT]->(topic)
-"""
 
 def import_posts_topics(request, context):
     headers = request["headers"]
@@ -102,40 +74,18 @@ def import_posts_topics(request, context):
 
     if event_type == "topic" and json_payload["topic"]["archetype"] == "regular":
         with db_driver.session() as session:
-            result = session.run(import_topic_query, {"params": json_payload})
+            result = session.run(q.import_topic_query, {"params": json_payload})
             print(result.summary().counters)
 
     if event_type == "post" and json_payload["post"]["topic_archetype"] == "regular":
         with db_driver.session() as session:
-            result = session.run(import_post_query, {"params": json_payload})
+            result = session.run(q.import_post_query, {"params": json_payload})
             print(result.summary().counters)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
 
-community_content_query = """\
-MERGE (user:DiscourseUser {id: $params.topic.user_id })
-SET user.name = $params.topic.created_by.username,
-    user.avatarTemplate = $params.topic.created_by.avatar_template
 
-MERGE (topic:DiscourseTopic {id: $params.topic.id })
-SET topic.title = $params.topic.title,
-    topic.createdAt = datetime($params.topic.created_at),
-    topic.slug = $params.topic.slug,
-    topic.approved = $params.approved,
-    topic.rating = $params.rating,
-    topic.likeCount = toInteger($params.topic.like_count),
-    topic.views = toInteger($params.topic.views),
-    topic.replyCount = toInteger($params.topic.reply_count),
-    topic.categoryId = $params.topic.category_id
-
-MERGE (user)-[:POSTED_CONTENT]->(topic)
-"""
-
-community_content_active_query = """\
-OPTIONAL MATCH (topic:DiscourseTopic {id: $params.topic.id })
-RETURN topic
-"""
 
 kudos_message = """
 Thanks for submitting!
@@ -143,40 +93,46 @@ Thanks for submitting!
 I've added a tag that allows your blog to be displayed on the community home page!
 """
 
+
 @retry(stop_max_attempt_number=5, wait_random_max=1000)
 def get_community_content_active(params):
     with db_driver.session() as session:
-        result = session.run(community_content_active_query, params)
+        result = session.run(q.community_content_active_query, params)
         print(result.summary().counters)
         row = result.peek()
-        content_already_approved = row.get("topic").get("approved") if row.get("topic") else False
+        content_already_approved = row.get("topic").get("approved") if row.get(
+            "topic") else False
         return content_already_approved
+
 
 @retry(stop_max_attempt_number=5, wait_random_max=1000)
 def set_community_content(params):
     with db_driver.session() as session:
-        result = session.run(community_content_query, params)
+        result = session.run(q.community_content_query, params)
         print(result.summary().counters)
         return True
+
 
 @retry(stop_max_attempt_number=5, wait_random_max=1000)
 def set_user_events(params):
     with db_driver.session() as session:
-        result = session.run(user_events_query, params)
+        result = session.run(q.user_events_query, params)
         print(result.summary().counters)
         return True
+
 
 @retry(stop_max_attempt_number=5, wait_random_max=1000)
 def set_import_twin4j(params):
     with db_driver.session() as session:
-        result = session.run(import_twin4j_query, params)
+        result = session.run(q.import_twin4j_query, params)
         print(result.summary().counters)
         return True
+
 
 @retry(stop_max_attempt_number=5, wait_random_max=1000)
 def set_update_topics(params):
     with db_driver.session() as session:
-        result = session.run(update_topics_query, params)
+        result = session.run(q.update_topics_query, params)
         print(result.summary().counters)
         return True
 
@@ -218,39 +174,6 @@ def community_content(request, context):
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
 
-user_events_query = """\
-MERGE (discourse:DiscourseUser {id: $params.user.id })
-SET discourse.name = $params.user.username,
-    discourse.location = $params.user.location,
-    discourse.avatarTemplate = $params.user.avatar_template,
-    discourse.screenName = $params.user.name
-WITH discourse
-
-MERGE (user:User {auth0_key: $params.user.external_id})
-ON CREATE SET user.email = $params.user.email
-MERGE (user)-[:DISCOURSE_ACCOUNT]->(discourse)
-
-WITH user
-
-OPTIONAL MATCH (twitter:Twitter {screen_name: $params.user.user_fields.`4`})
-FOREACH (_ IN CASE twitter WHEN null THEN [] ELSE [1] END |
-   MERGE (user)-[:TWITTER_ACCOUNT]->(twitter))
-
-WITH user
-
-OPTIONAL MATCH (github:GitHub {name: $params.user.user_fields.`6`})
-FOREACH (_ IN CASE github WHEN null THEN [] ELSE [1] END |
-   MERGE (user)-[:GITHUB_ACCOUNT]->(github))
-
-
-WITH user
-
-OPTIONAL MATCH (so:StackOverflow {id: toInteger($params.user.user_fields.`5`)})
-FOREACH (_ IN CASE so WHEN null THEN [] ELSE [1] END |
-   MERGE (user)-[:STACKOVERFLOW_ACCOUNT]->(so))
-"""
-
-
 def user_events(request, context):
     headers = request["headers"]
     event_type = headers["X-Discourse-Event-Type"]
@@ -270,41 +193,19 @@ def user_events(request, context):
 
     set_user_events({"params": json_payload})
 
-    context_parts = context.invoked_function_arn.split(':')
-    topic_name = "Discourse-Badges"
-    region = context_parts[3]
-    account_id = context_parts[4]
-    topic_arn = f"arn:aws:sns:{region}:{account_id}:{topic_name}"
+    topic_arn = construct_topic_arn(context, DISCOURSE_BADGES_TOPIC)
 
     sns = boto3.client('sns')
     message = {
         "externalId": json_payload["user"]["external_id"],
         "userName": json_payload["user"]["username"],
+        "discourseId": json_payload["user"]["id"],
         "badgeId": "103"
     }
     sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
 
     return {"statusCode": 200, "body": "Updated user", "headers": {}}
 
-
-import_twin4j_query = """\
-    MERGE (twin4j:TWIN4j {date: datetime($date) })
-    SET twin4j.image = $image, twin4j.summaryText = $summaryText, twin4j.link = $link
-
-    FOREACH(tag IN $allTheTags |
-      MERGE (t:TWIN4jTag {tag: tag.tag, anchor: tag.anchor })
-      MERGE (twin4j)-[:CONTAINS_TAG]->(t)
-    )
-
-    WITH twin4j
-    UNWIND $people AS person
-    OPTIONAL MATCH (twitter:User:Twitter) WHERE twitter.screen_name = person.screenName
-    OPTIONAL MATCH (user:User) where user.id = toInteger(person.stackOverflowId)
-    WITH coalesce(twitter, user) AS u, twin4j
-
-    CALL apoc.do.when(u is NOT NULL, 'MERGE (twin4j)-[:FEATURED]->(u)', '', {twin4j: twin4j, u: u}) YIELD value
-    RETURN value
-    """
 
 def edu_discourse_users_query(tx):
     query = """
@@ -337,6 +238,7 @@ def assign_edu_group(request, context):
     r = requests.put(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
     print("Added %d users to Edu group" % (counter))
 
+
 def edu_discourse_invite_query(tx):
     query = """
     MATCH (edu:EduApplication)<-[r:SUBMITTED_APPLICATION]-(user:User)
@@ -346,6 +248,7 @@ def edu_discourse_invite_query(tx):
     RETURN DISTINCT(user.email) as edu_email
     """
     return tx.run(query)
+
 
 def edu_discourse_invited_update(tx, usersInvited):
     query = """
@@ -359,6 +262,7 @@ def edu_discourse_invited_update(tx, usersInvited):
     RETURN count(user) as userCount
     """
     return tx.run(query, usersInvited=usersInvited)
+
 
 def send_edu_discourse_invites(request, context):
     counter = 0
@@ -468,46 +372,7 @@ def update_profile(request, context):
         return {"statusCode": 200, "body": "No action necessary", "headers": {}}
 
 
-update_topics_query = """\
-UNWIND $params AS t
-MATCH (topic:DiscourseTopic {id: t.id })
-SET topic.likeCount = toInteger(t.like_count),
-    topic.views = toInteger(t.views),
-    topic.replyCount = toInteger(t.replyCount)
-"""
 
-store_medium_post_query = """\
-MATCH (ma:MediumAuthor {name: $author})
-MERGE (mp:MediumPost {guid: $guid})
-ON CREATE SET
-  mp.title = $title,
-  mp.author = $author,
-  mp.url = $url,
-  mp.content = $content,
-  mp.date = $date
-MERGE (mp)-[:AUTHORED_BY]->(ma)
-"""
-
-get_medium_posts_query = """\
-MATCH (mp:MediumPost)-[:AUTHORED_BY]->(ma:MediumAuthor)-[:HAS_DISCOURSE]->(du:DiscourseUser)
-WHERE
-  mp.discourse_id IS NULL
-RETURN
-  mp.title AS title,
-  mp.url AS url,
-  mp.content AS content,
-  mp.date AS date,
-  mp.guid AS guid,
-  du.name AS discourse_user
-"""
-
-set_medium_post_posted_query = """\
-MATCH (mp:MediumPost)
-WHERE
-  mp.guid = $mediumId
-SET
-  mp.discourse_id = $discourseId
-"""
 
 
 def fetch_medium_posts(request, context):
@@ -524,20 +389,20 @@ def fetch_medium_posts(request, context):
       blog_date = "%d-%02d-%02d" % (date.tm_year, date.tm_mon, date.tm_mday)
       with db_driver.session() as session:
         params = {"title": blog_title, "author": blog_author, "url": blog_url, "date": blog_date, "guid": guid, "content": blog_content}
-        result = session.run(store_medium_post_query, params)
+        result = session.run(q.store_medium_post_query, params)
         result.consume()
 
 
 def post_medium_to_discourse(request, context):
     counter = 0
     with db_driver.session() as session:
-      result = session.run(get_medium_posts_query, {})
+      result = session.run(q.get_medium_posts_query, {})
       for record in result:
         dt = post_topic_to_discourse(discourse_blog_category_id, record['discourse_user'], record['title'], record['content'], record['date'])
         counter = counter + 1
         if 'id' in dt:
           params = {"discourseId": dt['id'], "mediumId": record['guid']}
-          update_res = session.run(set_medium_post_posted_query, params)
+          update_res = session.run(q.set_medium_post_posted_query, params)
           update_res.consume()
     return "Posted %d posts to discourse" % (counter)
 
@@ -566,22 +431,6 @@ def update_topics(request, context):
 
     set_update_topics({"params": topics})
 
-update_categories_subcategories_query = """\
-UNWIND $params AS event
-MERGE (category:DiscourseCategory {id: event.id})
-SET category.name = event.name, category.description = event.description
-WITH category, event
-UNWIND event.subcategory_ids AS subCategoryId
-MERGE (subCategory:DiscourseCategory {id: subCategoryId})
-MERGE (subCategory)-[:CHILD]->(category)
-"""
-
-update_categories_query = """\
-UNWIND $params AS event
-MERGE (category:DiscourseCategory {id: event.id})
-SET category.name = event.name, category.description = event.description
-"""
-
 
 def update_categories_tx_fn(tx, params):
     tx.run(tx, params=params)
@@ -601,7 +450,7 @@ def update_categories(request, context):
 
     with db_driver.session() as session:
         categories = response["category_list"]["categories"]
-        result = session.run(update_categories_subcategories_query, params=categories)
+        result = session.run(q.update_categories_subcategories_query, params=categories)
         print(result.summary().counters)
 
     r = requests.get("https://community.neo4j.com/site.json", headers={'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
@@ -609,48 +458,21 @@ def update_categories(request, context):
     categories = response["categories"]
 
     with db_driver.session() as session:
-        result = session.run(update_categories_query, params=categories)
+        result = session.run(q.update_categories_query, params=categories)
         print(result.summary().counters)
-
-
-ninjas_so_query = """\
-WITH $now as currentMonth
-Match (u:User:StackOverflow)
-match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
-WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
-with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
-with currentMonth, week, u.name as user, count(*) as total, sum(case when a.is_accepted then 1 else 0 end) as accepted
-ORDER BY total DESC
-return currentMonth, user, collect([week,total,accepted]) as weekly
-"""
-
-
-ninjas_discourse_query = """\
-MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
-with *, post.createdAt.week as week
-with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
-ORDER BY week, total DESC
-WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
-WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
-RETURN u.name AS user, email,
-       apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
-       apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
-ORDER BY size(keys(weekly)) DESC
-"""
 
 
 def ninja_activity(request, context):
     now = datetime.datetime.now()
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
-        result = session.run(ninjas_discourse_query, params)
+        result = session.run(q.ninjas_discourse_query, params)
 
         discourse_header = result.keys()
         discourse_rows = [row.values() for row in result]
 
         params = {"now": now.strftime("%Y-%m")}
-        result = session.run(ninjas_so_query, params)
+        result = session.run(q.ninjas_so_query, params)
 
         so_header = result.keys()
         so_rows = [row.values() for row in result]
@@ -752,32 +574,6 @@ def ninja_activity(request, context):
             })
         print(response)
 
-ninjas_api_so_query = """\
-WITH $now as currentMonth
-Match (u:User:StackOverflow)
-match (u)-[:POSTED]->(a:Answer)-[:ANSWERED]->(q:Question)
-WHERE apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM') = currentMonth
-with *, apoc.date.format(coalesce(a.created,q.created),'s','yyyy-MM-W') as week
-with currentMonth, week, u.name as user, count(*) as total, sum(case when a.is_accepted then 1 else 0 end) as accepted
-ORDER BY total DESC
-return currentMonth, user, collect([week,total,accepted]) as weekly
-"""
-
-
-ninjas_api_discourse_query = """\
-MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
-with *, post.createdAt.week as week
-with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
-ORDER BY week, total DESC
-WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
-WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | u.screenName][0] AS discourseUser, weekly, categories
-WITH u.name AS user, discourseUser, 
-     apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
-     apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
-RETURN user,discourseUser, weekly, categories       
-ORDER BY size(keys(weekly)) DESC
-"""
 
 def api_all_ninjas(event, context):
     print(event)
@@ -792,12 +588,12 @@ def api_all_ninjas(event, context):
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
-        result = session.run(ninjas_api_discourse_query, params)
+        result = session.run(q.ninjas_api_discourse_query, params)
 
         discourse_rows = [row.data() for row in result]
 
         params = {"now": now.strftime("%Y-%m")}
-        result = session.run(ninjas_api_so_query, params)
+        result = session.run(q.ninjas_api_so_query, params)
 
         so_rows = [row.data() for row in result]
 
@@ -810,15 +606,10 @@ def api_all_ninjas(event, context):
     }}
 
 
-did_user_pass_query = """
-MATCH path = (user:User {auth0_key: $externalId})-[:TOOK]->(exam)
-WHERE exists(exam.certificatePath) AND exam.passed
-WITH count(*) AS count
-RETURN CASE WHEN count > 0 THEN true ELSE false END AS certified
-"""
-
-
 def assign_badges(event, context):
+    sns = boto3.client('sns')
+    topic_arn = construct_topic_arn(context, STORE_BADGES_TOPIC)
+
     for record in event["Records"]:
         print(record)
 
@@ -826,10 +617,11 @@ def assign_badges(event, context):
         external_id = message["externalId"]
         badge_id = message["badgeId"]
         user_name = message["userName"]
+        discourse_id = message["discourseId"]
 
         # Check if the user earnt the badge
         with db_driver.session() as session:
-            is_certified = session.run(did_user_pass_query, {"externalId": external_id}).single()["certified"]
+            is_certified = session.run(q.did_user_pass_query, {"externalId": external_id}).single()["certified"]
 
         if is_certified:
             print("User is certified, assigned badge")
@@ -848,31 +640,59 @@ def assign_badges(event, context):
             r = requests.post(uri, data=m, headers={'Content-Type': m.content_type})
             print(r)
 
+            message = {"discourseId": discourse_id, "userName": user_name}
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
 
-users_who_passed_query = """
-MATCH (user:User)-[:TOOK]->(exam)
-WHERE exists(exam.certificatePath) AND exam.passed
-MATCH (user)-[:DISCOURSE_ACCOUNT]->(account)
-RETURN user.auth0_key AS externalId, account.name AS userName
-"""
+
+def store_badges_tx(tx, params):
+    return tx.run(q.store_badges_query, params)
+
+
+def find_users_badges(event, context):
+    topic_arn = construct_topic_arn(context, STORE_BADGES_TOPIC)
+
+    sns = boto3.client('sns')
+    with db_driver.session() as session:
+        rows = session.run(q.users_query)
+        for row in rows:
+            print(row)
+            username = row["userName"]
+            discourse_id = row["discourseId"]
+
+            message = {"discourseId": discourse_id, "userName": username}
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
+
+def store_badges(event, context):
+    for record in event["Records"]:
+        print(record)
+
+        message = json.loads(record["Sns"]["Message"])
+        discourse_id = message["discourseId"]
+        username = message["userName"]
+
+        r = requests.get(f"https://community.neo4j.com/user-badges/{username}.json")
+        badges = r.json().get("badges")
+        badges = badges if badges else []
+        print("user", username, "discourseId" , discourse_id, "badges", badges)
+        with db_driver.session() as session:
+            params = {"id": discourse_id, "badges": badges}
+            result = session.write_transaction(store_badges_tx, params)
+            print("params", params, "result", result.summary().counters)
 
 
 def missing_badges(event, context):
-    context_parts = context.invoked_function_arn.split(':')
-    topic_name = "Discourse-Badges"
-    region = context_parts[3]
-    account_id = context_parts[4]
-    topic_arn = f"arn:aws:sns:{region}:{account_id}:{topic_name}"
-
     sns = boto3.client('sns')
+    topic_arn = construct_topic_arn(context, DISCOURSE_BADGES_TOPIC)
 
     with db_driver.session() as session:
-        rows = session.run(users_who_passed_query)
+        rows = session.run(q.users_who_passed_query_but_dont_have_badge)
         for row in rows:
             print(row)
             message = {
                 "externalId": row["externalId"],
                 "userName": row["userName"],
+                "discourseId": row["discourseId"],
                 "badgeId": "103"
             }
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
