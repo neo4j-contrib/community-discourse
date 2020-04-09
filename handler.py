@@ -16,8 +16,14 @@ from dateutil import parser
 
 import util.queries as q
 
-DISCOURSE_BADGES_TOPIC = "Discourse-Badges"
+ASSIGN_BADGES_TOPIC = "Discourse-Badges"
 STORE_BADGES_TOPIC = "Store-Discourse-Badges"
+
+ASSIGN_GROUPS_TOPIC = "Discourse-Groups"
+STORE_GROUPS_TOPIC = "Store-Discourse-Groups"
+
+CERTIFICATION_BADGE_ID = "103"
+CERTIFICATION_GROUP_ID = "41"
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -182,31 +188,37 @@ def user_events(request, context):
     headers = request["headers"]
     event_type = headers["X-Discourse-Event-Type"]
     event = headers["X-Discourse-Event"]
-    print(f"Received {event_type}: {event}")
+    logger.info(f"Received {event_type}: {event}")
 
     if event_type == "user" and event == "user_created":
-        print("User created so we'll update everything when they login")
+        logger.info("User created so we'll update everything when they login")
         return {"statusCode": 200, "body": "It was just a user creation event", "headers": {}}
     elif event_type == "user" and event == "user_destroyed":
-        print("User destroyed so no longer need to care about user")
+        logger.info("User destroyed so no longer need to care about user")
         return {"statusCode": 200, "body": "It was just a user destruction event -- no action as dont know reason", "headers": {}}
 
     body = request["body"]
     json_payload = json.loads(body)
-    print(json_payload)
+    logger.info(f"json: {json_payload}")
 
     set_user_events({"params": json_payload})
 
-    topic_arn = construct_topic_arn(context, DISCOURSE_BADGES_TOPIC)
-
     sns = boto3.client('sns')
-    message = {
-        "externalId": json_payload["user"]["external_id"],
-        "userName": json_payload["user"]["username"],
-        "discourseId": json_payload["user"]["id"],
-        "badgeId": "103"
-    }
-    sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+    sns.publish(TopicArn=(construct_topic_arn(context, ASSIGN_BADGES_TOPIC)),
+                Message=json.dumps({
+                    "externalId": json_payload["user"]["external_id"],
+                    "userName": json_payload["user"]["username"],
+                    "discourseId": json_payload["user"]["id"],
+                    "badgeId": CERTIFICATION_BADGE_ID
+                }))
+
+    sns.publish(TopicArn=(construct_topic_arn(context, ASSIGN_GROUPS_TOPIC)),
+                Message=json.dumps({
+                    "externalId": json_payload["user"]["external_id"],
+                    "userName": json_payload["user"]["username"],
+                    "discourseId": json_payload["user"]["id"],
+                    "badgeId": CERTIFICATION_GROUP_ID
+                }))
 
     return {"statusCode": 200, "body": "Updated user", "headers": {}}
 
@@ -219,28 +231,30 @@ def edu_discourse_users_query(tx):
     """
     return tx.run(query)
 
+
 def assign_edu_group(request, context):
     counter = 0
     group = ''
     uri = f"https://community.neo4j.com/groups/49/members.json"
 
     with db_driver.session() as session:
-      result = session.read_transaction(edu_discourse_users_query)
-
-      for record in result:
-        if counter != 0:
-            group +=  ','
-        group +=  record['discourse_users']
-        counter = counter + 1
+        result = session.read_transaction(edu_discourse_users_query)
+        for record in result:
+            if counter != 0:
+                group += ','
+            group += record['discourse_users']
+            counter = counter + 1
 
     payload = {
         "usernames": group
     }
-    print(payload)
+    logger.info(f"Adding {payload} users to Edu group")
 
     m = MultipartEncoder(fields=payload)
-    r = requests.put(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
-    print("Added %d users to Edu group" % (counter))
+    r = requests.put(uri, data=m,
+                     headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key,
+                              'Api-Username': discourse_api_user})
+    logger.info(f"Added {counter} users to Edu group")
 
 
 def edu_discourse_invite_query(tx):
@@ -609,8 +623,6 @@ def assign_badges(event, context):
     topic_arn = construct_topic_arn(context, STORE_BADGES_TOPIC)
 
     for record in event["Records"]:
-        logger.info(f"Record: {record}")
-
         message = json.loads(record["Sns"]["Message"])
         external_id = message["externalId"]
         badge_id = message["badgeId"]
@@ -621,8 +633,9 @@ def assign_badges(event, context):
         with db_driver.session() as session:
             is_certified = session.run(q.did_user_pass_query, {"externalId": external_id}).single()["certified"]
 
+        logger.info(f"externalId: {external_id}, userName: {user_name}, discourseId: {discourse_id}, isCertified: {is_certified}")
+
         if is_certified:
-            logger.info(f"user: {user_name}, discourseId: {discourse_id}: User is certified, assigned badge")
             uri = f"https://community.neo4j.com/user_badges.json"
 
             payload = {
@@ -632,7 +645,7 @@ def assign_badges(event, context):
 
             m = MultipartEncoder(fields=payload)
             r = requests.post(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
-            print("user", user_name, "discourseId", discourse_id, "response", r, r.json())
+            logger.info(f"user: {user_name}, discourseId: {discourse_id}, response:  {r} ->  {r.json()}")
 
             message = {"discourseId": discourse_id, "userName": user_name}
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
@@ -643,7 +656,7 @@ def find_users_badges(event, context):
 
     sns = boto3.client('sns')
     with db_driver.session() as session:
-        rows = session.run(q.users_query)
+        rows = session.run(q.users_badge_refresh_query)
         for row in rows:
             logger.info(f"row: {row}")
             username = row["userName"]
@@ -668,7 +681,7 @@ def store_badges(event, context):
         r = requests.get(f"https://community.neo4j.com/user-badges/{username}.json")
         badges = r.json().get("badges")
         badges = badges if badges else []
-        logger.info(f"user: {username}, discourseId: {discourse_id}, badgers: {badges}")
+        logger.info(f"user: {username}, discourseId: {discourse_id}, badges: {badges}")
         with db_driver.session() as session:
             params = {"id": discourse_id, "badges": badges}
             result = session.write_transaction(store_badges_tx, params)
@@ -677,7 +690,7 @@ def store_badges(event, context):
 
 def missing_badges(event, context):
     sns = boto3.client('sns')
-    topic_arn = construct_topic_arn(context, DISCOURSE_BADGES_TOPIC)
+    topic_arn = construct_topic_arn(context, ASSIGN_BADGES_TOPIC)
 
     with db_driver.session() as session:
         rows = session.run(q.users_who_passed_query_but_dont_have_badge)
@@ -687,6 +700,94 @@ def missing_badges(event, context):
                 "externalId": row["externalId"],
                 "userName": row["userName"],
                 "discourseId": row["discourseId"],
-                "badgeId": "103"
+                "badgeId": CERTIFICATION_BADGE_ID
             }
+            logger.info(f"message: {message}")
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
+
+def find_users_groups(event, context):
+    topic_arn = construct_topic_arn(context, STORE_GROUPS_TOPIC)
+
+    sns = boto3.client('sns')
+    with db_driver.session() as session:
+        rows = session.run(q.users_groups_refresh_query)
+        for row in rows:
+            logger.info(f"row: {row}")
+            username = row["userName"]
+            discourse_id = row["discourseId"]
+
+            message = {"discourseId": discourse_id, "userName": username}
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
+
+def store_groups_tx(tx, params):
+    return tx.run(q.store_groups_query, params)
+
+
+def store_groups(event, context):
+    for record in event["Records"]:
+        message = json.loads(record["Sns"]["Message"])
+        discourse_id = message["discourseId"]
+        username = message["userName"]
+        logger.info(f"username: {username}, discourseId: {discourse_id}")
+
+        headers = {'Content-Type': 'application/json',
+                   'Api-Key': discourse_api_key,
+                   'Api-Username': discourse_api_user}
+        r = requests.get(f"https://community.neo4j.com/users/{username}.json", headers=headers)
+        groups = r.json().get("user", {}).get("groups", [])
+        groups = groups if groups else []
+        logger.info(f"user: {username}, discourseId: {discourse_id}, groups: {groups}")
+        with db_driver.session() as session:
+            params = {"id": discourse_id, "groups": groups}
+            result = session.write_transaction(store_groups_tx, params)
+            logger.info(f"params: {params}, result: {result.summary().counters}")
+
+
+def missing_groups(event, context):
+    sns = boto3.client('sns')
+    topic_arn = construct_topic_arn(context, ASSIGN_GROUPS_TOPIC)
+
+    with db_driver.session() as session:
+        rows = session.run(q.users_who_passed_query_but_dont_have_group)
+        for row in rows:
+            logger.info(f"row: {row}")
+            message = {
+                "externalId": row["externalId"],
+                "userName": row["userName"],
+                "discourseId": row["discourseId"],
+                "groupId": CERTIFICATION_GROUP_ID
+            }
+            logger.info(f"message: {message}")
+            sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
+
+def assign_groups(event, context):
+    sns = boto3.client('sns')
+    topic_arn = construct_topic_arn(context, STORE_GROUPS_TOPIC)
+
+    for record in event["Records"]:
+        message = json.loads(record["Sns"]["Message"])
+        external_id = message["externalId"]
+        group_id = message["groupId"]
+        user_name = message["userName"]
+        discourse_id = message["discourseId"]
+
+        with db_driver.session() as session:
+            is_certified = session.run(q.did_user_pass_query, {"externalId": external_id}).single()["certified"]
+
+        logger.info(f"externalId: {external_id}, userName: {user_name}, discourseId: {discourse_id}, isCertified: {is_certified}")
+
+        if is_certified:
+            uri = f"https://community.neo4j.com/groups/{group_id}/members.json"
+            payload = { "usernames": user_name}
+            logger.info(f"Adding {payload} users to group {group_id}")
+
+            m = MultipartEncoder(fields=payload)
+            headers = {'Content-Type': m.content_type, 'Api-Key': discourse_api_key,'Api-Username': discourse_api_user}
+            r = requests.put(uri, data=m, headers=headers)
+            logger.info(f"user: {user_name}, discourseId: {discourse_id}, groups: {r} -> {r.json()}")
+
+            message = {"discourseId": discourse_id, "userName": user_name}
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))

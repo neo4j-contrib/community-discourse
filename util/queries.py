@@ -8,12 +8,35 @@ ON CREATE SET discourseBadge.name = badge.name, discourseBadge.description = bad
 MERGE (discourseUser)-[:HAS_BADGE]->(discourseBadge)
 """
 
-users_query = """
+users_badge_refresh_query = """
 MATCH (account:DiscourseUser)
 WITH account { 
     .id, 
     .name, 
     lastRefresh: coalesce(account.lastBadgeRefresh, datetime() - duration("PT24H1M")) 
+}
+WHERE account.lastRefresh < datetime() - duration("PT24H")
+RETURN account.id AS discourseId, account.name AS userName
+LIMIT 100
+"""
+
+
+store_groups_query = """
+MATCH (discourseUser:DiscourseUser {id: $id})
+SET discourseUser.lastGroupRefresh = datetime()
+WITH discourseUser
+     UNWIND $groups AS group
+MERGE (discourseGroup:DiscourseGroup {id: group.id})
+ON CREATE SET discourseGroup.name = group.name
+MERGE (discourseUser)-[:IN_GROUP]->(discourseGroup)
+"""
+
+users_groups_refresh_query = """
+MATCH (account:DiscourseUser)
+WITH account { 
+    .id, 
+    .name, 
+    lastRefresh: coalesce(account.lastGroupRefresh, datetime() - duration("PT24H1M")) 
 }
 WHERE account.lastRefresh < datetime() - duration("PT24H")
 RETURN account.id AS discourseId, account.name AS userName
@@ -33,6 +56,21 @@ RETURN DISTINCT user.auth0_key AS externalId,
 ORDER BY size(badges) DESC
 LIMIT 100
 """
+
+users_who_passed_query_but_dont_have_group = """
+MATCH (user:User)-[:TOOK]->(exam)
+WHERE exists(exam.certificatePath) AND exam.passed
+MATCH (user)-[:DISCOURSE_ACCOUNT]->(account)
+WHERE not((account)-[:IN_GROUP]->(:DiscourseGroup {id: 41}))
+RETURN DISTINCT user.auth0_key AS externalId, 
+       account.name AS userName, 
+       account.id AS discourseId, 
+       [(account)-[:IN_GROUP]->(group) | group.name] AS groups,
+       [(account)-[:HAS_BADGE]->(badge) | badge.name] AS badges
+ORDER BY size(groups) DESC
+LIMIT 50
+"""
+
 
 did_user_pass_query = """
 MATCH path = (user:User {auth0_key: $externalId})-[:TOOK]->(exam)

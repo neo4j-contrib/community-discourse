@@ -25,6 +25,24 @@ custom:
         - Ref: AWS::Region
         - Ref: AWS::AccountId
         - Store-Discourse-Badges
+  GroupsTopic:
+    Fn::Join:
+      - ":"
+      - - arn
+        - aws
+        - sns
+        - Ref: AWS::Region
+        - Ref: AWS::AccountId
+        - Discourse-Groups
+  StoreGroupsTopic:
+    Fn::Join:
+      - ":"
+      - - arn
+        - aws
+        - sns
+        - Ref: AWS::Region
+        - Ref: AWS::AccountId
+        - Store-Discourse-Groups
 
 provider:
   name: aws
@@ -60,6 +78,16 @@ provider:
         - "sns:Publish"
       Resource:
         - ${self:custom.StoreBadgesTopic}
+    - Effect: 'Allow'
+      Action:
+        - "sns:Publish"
+      Resource:
+        - ${self:custom.GroupsTopic}
+    - Effect: 'Allow'
+      Action:
+        - "sns:Publish"
+      Resource:
+        - ${self:custom.StoreGroupsTopic}
 
 
 plugins:
@@ -158,6 +186,28 @@ functions:
       - sns:
           topicName: Store-Discourse-Badges
           displayName: Topic to handle storing badges in Neo4j
+  assign-groups:
+    name: Discourse-AssignGroups
+    handler: handler.assign_groups
+    events:
+      - sns:
+          topicName: Discourse-Groups
+          displayName: Topic to handle assigning of groups
+  missing-groups:
+    name: Discourse-MissingGroups
+    handler: handler.missing_groups
+  find-users-groups:
+    name: Discourse-FindUsersAndGroups
+    handler: handler.find_users_groups
+    events:
+      - schedule: rate(1 minute)
+  store-groups:
+    name: Discourse-StoreGroups
+    handler: handler.store_groups
+    events:
+      - sns:
+          topicName: Store-Discourse-Groups
+          displayName: Topic to handle storing groups in Neo4j
 
 
 package:
