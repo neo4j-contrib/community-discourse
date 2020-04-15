@@ -18,6 +18,7 @@ click = "*"
 feedparser = "*"
 requests-toolbelt = "*"
 neo4j = "*"
+pendulum = "*"
 
 [requires]
 python_version = "3.6"

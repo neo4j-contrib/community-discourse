@@ -1,3 +1,4 @@
+import calendar
 import datetime
 import json
 import re
@@ -588,15 +589,29 @@ def ninja_activity(request, context):
         print(response)
 
 
+def workdays(d, end, excluded=(6, 7)):
+    days = []
+    while d.date() <= end.date():
+        if d.isoweekday() not in excluded:
+            days.append(d)
+        d += datetime.timedelta(days=1)
+    return days
+
+
 def api_all_ninjas(event, context):
     print(event)
     qs = event.get("multiValueQueryStringParameters")
     if qs and qs.get("date"):
-        now = parser.parse(qs["date"][0])
+        now = parser.parse(qs["date"][0]).replace(day=1)
     else:
         now = datetime.datetime.now().replace(day=1)
 
-    logger.info(f"Retrieving Ninja activities for {now}")
+    start = now - datetime.timedelta(days = (now.weekday() + 1) % 7)
+    end = now.replace(day=calendar.monthrange(now.year,now.month)[1])
+    end = end - datetime.timedelta(days=(end.weekday() + 1) % 7)
+    logger.info(f"Retrieving Ninja activities for {now}. Start: {start}, End: {end}")
+
+    weeks = workdays(start, end, [1,2,3,4,5,6])
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
@@ -611,7 +626,8 @@ def api_all_ninjas(event, context):
 
     return {"statusCode": 200, "body": json.dumps({
         "discourse": discourse_rows,
-        "so": so_rows
+        "so": so_rows,
+        "weeks": [week.strftime("%Y-%m-%d") for week in weeks]
     }), "headers": {
         "Content-Type": "application/json",
         'Access-Control-Allow-Origin': '*'
