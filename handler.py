@@ -14,8 +14,11 @@ from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from retrying import retry
 from dateutil import parser
+import hashlib
+import hmac
 
 import util.queries as q
+import util.ninja as n
 
 ASSIGN_BADGES_TOPIC = "Discourse-Badges"
 STORE_BADGES_TOPIC = "Store-Discourse-Badges"
@@ -807,3 +810,58 @@ def assign_groups(event, context):
 
             message = {"discourseId": discourse_id, "userName": user_name}
             sns.publish(TopicArn=topic_arn, Message=json.dumps(message))
+
+
+def poll_ninja_requests(event, context):
+    headers = {'Content-Type': 'application/json', 'Api-Key': discourse_api_key,'Api-Username': discourse_api_user}
+    group_name = "ninja"
+    group_id = 50
+    mother_of_ninjas = "mark.needham,karin.wolok"
+
+    logger.info("Polling for new requests to join the Ninja Group")
+    requesters_uri = f"https://community.neo4j.com/g/{group_name}/members.json?requesters=true"
+    response = requests.get(requesters_uri, headers=headers).json()
+    members = [{k: v
+                for k, v in m.items() if k in ["id", "name", "username"]}
+               for m in response["members"]]
+    logger.info(f"Found members: {members}")
+
+    handle_request_uri = f"https://community.neo4j.com/groups/{group_id}/handle_membership_request.json"
+    for member in members:
+        name = member.get('name')
+        username = member.get('username')
+        with db_driver.session() as session:
+            is_certified = session.run(q.did_discourse_user_pass_query, {"discourseUserId": member["id"]}).single()["certified"]
+            if is_certified:
+                logger.info(f"User is certified: {member}")
+                payload = {"accept": True, "user_id": member["id"]}
+                add_to_group_response = requests.put(handle_request_uri,
+                                                     headers=headers,
+                                                     data=json.dumps(payload))
+                logger.info(f"Request processed: {add_to_group_response.json()}")
+
+                send_private_message(headers, {
+                    "raw": n.ninja_acceptance_message(name, username),
+                    "target_usernames": username,
+                    "title": f"Neo4j Ninja Group Request Accepted"
+                })
+                send_private_message(headers, {
+                    "raw": n.ninja_approval_owner_message(name, username),
+                    "target_usernames": mother_of_ninjas,
+                    "title": f"Neo4j Ninja Approved: {name or username}"
+                })
+            else:
+                logger.info(f"User is not certified: {member}")
+                send_private_message(headers, {
+                    "raw": n.ninja_rejection_owner_message(name, username),
+                    "target_usernames": mother_of_ninjas,
+                    "title": f"Neo4j Ninja Rejected: {name or username}"
+                })
+
+
+def send_private_message(headers, payload):
+    payload["archetype"] = "private_message"
+    response = requests.post(f"https://community.neo4j.com/posts.json",
+                             headers=headers,
+                             data=json.dumps(payload))
+    logger.info(f"response: {response.json()}")

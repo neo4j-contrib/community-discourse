@@ -212,6 +212,9 @@ functions:
       - sns:
           topicName: Store-Discourse-Groups
           displayName: Topic to handle storing groups in Neo4j
+  poll-ninja-requests:
+    name: Discourse-PollNinjaRequests
+    handler: handler.poll_ninja_requests
 
 
 package:

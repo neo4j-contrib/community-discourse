@@ -79,6 +79,15 @@ WITH count(*) AS count
 RETURN CASE WHEN count > 0 THEN true ELSE false END AS certified
 """
 
+did_discourse_user_pass_query = """
+MATCH (discourseUser:DiscourseUser {id: $discourseUserId})<-[:DISCOURSE_ACCOUNT]-(user)
+MATCH path = (user:User)-[:TOOK]->(exam)
+WHERE exists(exam.certificatePath) AND exam.passed
+WITH count(*) AS count
+RETURN CASE WHEN count > 0 THEN true ELSE false END AS certified
+"""
+
+
 ninjas_api_so_query = """\
 WITH $now as currentMonth
 Match (u:User:StackOverflow)
