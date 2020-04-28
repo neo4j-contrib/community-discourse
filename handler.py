@@ -99,8 +99,6 @@ def import_posts_topics(request, context):
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
 
 
-
-
 kudos_message = """
 Thanks for submitting!
 
@@ -182,7 +180,10 @@ def community_content(request, context):
         }
 
         m = MultipartEncoder(fields=payload)
-        r = requests.post(uri, data=m, headers={'Content-Type': m.content_type, 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user})
+        r = requests.post(uri, data=m,
+                          headers={'Content-Type': m.content_type,
+                                   'Api-Key': discourse_api_key,
+                                   'Api-Username': discourse_api_user})
         print(r)
 
     return {"statusCode": 200, "body": "Got the event", "headers": {}}
@@ -477,120 +478,6 @@ def update_categories(request, context):
     with db_driver.session() as session:
         result = session.run(q.update_categories_query, params=categories)
         print(result.summary().counters)
-
-
-def ninja_activity(request, context):
-    now = datetime.datetime.now()
-    with db_driver.session() as session:
-        params = {"year": now.year, "month": now.month }
-        result = session.run(q.ninjas_discourse_query, params)
-
-        discourse_header = result.keys()
-        discourse_rows = [row.values() for row in result]
-
-        params = {"now": now.strftime("%Y-%m")}
-        result = session.run(q.ninjas_so_query, params)
-
-        so_header = result.keys()
-        so_rows = [row.values() for row in result]
-
-        t = Template("""\
-            <html>
-            <head>
-                <style>
-                #customers {
-                font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
-                border-collapse: collapse;
-                width: 100%;
-                }
-
-                #customers td, #customers th {
-                border: 1px solid #ddd;
-                padding: 8px;
-                }
-
-                #customers tr:nth-child(even){background-color: #f2f2f2;}
-
-                #customers tr:hover {background-color: #ddd;}
-
-                #customers th {
-                padding-top: 12px;
-                padding-bottom: 12px;
-                text-align: left;
-                background-color: #4291d6;
-                color: white;
-                }
-                </style>
-            </head>
-            <body>
-            <p>
-                Hi Karin,
-            </p>
-            <p>
-                The Neo4j Ninjas have been busy. See below for the biggest contributors this month.
-            </p>
-
-            <p>
-                Cheers, Greta the Graph Giraffe
-            </p>
-
-            <h2>Discourse Activity</h2>
-            <table id="customers">
-                <tr>
-                {% for column in discourse_header %}
-                    <th>{{column}}</th>
-                {% endfor %}
-                </tr>
-                {% for row in discourse_rows %}
-                    <tr>
-                        {% for column in row %}
-                            <td>{{ column }}</td>
-                        {% endfor %}
-                    </tr>
-                {% endfor %}
-            </table>
-
-            <h2>StackOverflow Activity</h2>
-            <table id="customers">
-                <tr>
-                {% for column in so_header %}
-                    <th>{{column}}</th>
-                {% endfor %}
-                </tr>
-                {% for row in so_rows %}
-                    <tr>
-                        {% for column in row %}
-                            <td>{{ column }}</td>
-                        {% endfor %}
-                    </tr>
-                {% endfor %}
-            </table>
-            </body>
-            </html>""")
-        message = t.render(
-            discourse_rows = discourse_rows,
-            discourse_header=discourse_header,
-            so_header = so_header,
-            so_rows = so_rows
-            )
-
-        client = boto3.client('ses')
-        response = client.send_email(
-            Source="mark.needham@neo4j.com",
-            Destination={"ToAddresses": ["karinwolok1@gmail.com", "m.h.needham@gmail.com"]},
-            # Destination={"ToAddresses": ["m.h.needham@gmail.com"]},
-            Message={
-                "Body": {
-                    "Html": {
-                        "Data": message
-                    }
-                },
-                "Subject": {
-                    "Data": f"Ninja Activity on {now.strftime('%d %b %Y at %H:%M')}"
-                }
-            })
-        print(response)
-
 
 def workdays(d, end, excluded=(6, 7)):
     days = []
