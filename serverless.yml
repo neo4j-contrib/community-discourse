@@ -210,6 +210,8 @@ functions:
   poll-ninja-requests:
     name: Discourse-PollNinjaRequests
     handler: handler.poll_ninja_requests
+    events:
+      - schedule: rate(1 hour)
 
 
 package:

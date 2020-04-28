@@ -739,6 +739,12 @@ def poll_ninja_requests(event, context):
                 })
             else:
                 logger.info(f"User is not certified: {member}")
+                payload = {"user_id": member["id"]}
+                add_to_group_response = requests.put(handle_request_uri,
+                                                     headers=headers,
+                                                     data=json.dumps(payload))
+                logger.info(f"Request processed: {add_to_group_response.json()}")
+
                 send_private_message(headers, {
                     "raw": n.ninja_rejection_owner_message(name, username),
                     "target_usernames": mother_of_ninjas,
