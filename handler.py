@@ -395,9 +395,6 @@ def update_profile(request, context):
         return {"statusCode": 200, "body": "No action necessary", "headers": {}}
 
 
-
-
-
 def fetch_medium_posts(request, context):
     d = feedparser.parse('https://medium.com/feed/neo4j')
     post_count = 0
@@ -479,6 +476,7 @@ def update_categories(request, context):
         result = session.run(q.update_categories_query, params=categories)
         print(result.summary().counters)
 
+
 def workdays(d, end, excluded=(6, 7)):
     days = []
     while d.date() <= end.date():
@@ -501,7 +499,7 @@ def api_all_ninjas(event, context):
     end = end - datetime.timedelta(days=(end.weekday() + 1) % 7)
     logger.info(f"Retrieving Ninja activities for {now}. Start: {start}, End: {end}")
 
-    weeks = workdays(start, end, [1,2,3,4,5,6])
+    weeks = [{"start": day, "end": day + datetime.timedelta(days=6)} for day in workdays(start, end, [1,2,3,4,5,6])]
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month }
@@ -517,7 +515,9 @@ def api_all_ninjas(event, context):
     return {"statusCode": 200, "body": json.dumps({
         "discourse": discourse_rows,
         "so": so_rows,
-        "weeks": [week.strftime("%Y-%m-%d") for week in weeks]
+        "weeks": [{"start": week["start"].strftime("%Y-%m-%d"),
+                   "end": week["end"].strftime("%Y-%m-%d")}
+                  for week in weeks]
     }), "headers": {
         "Content-Type": "application/json",
         'Access-Control-Allow-Origin': '*'
