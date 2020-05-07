@@ -477,53 +477,6 @@ def update_categories(request, context):
         print(result.summary().counters)
 
 
-def workdays(d, end, excluded=(6, 7)):
-    days = []
-    while d.date() <= end.date():
-        if d.isoweekday() not in excluded:
-            days.append(d)
-        d += datetime.timedelta(days=1)
-    return days
-
-
-def api_all_ninjas(event, context):
-    print(event)
-    qs = event.get("multiValueQueryStringParameters")
-    if qs and qs.get("date"):
-        now = parser.parse(qs["date"][0]).replace(day=1)
-    else:
-        now = datetime.datetime.now().replace(day=1)
-
-    start = now - datetime.timedelta(days = (now.weekday() + 1) % 7)
-    end = now.replace(day=calendar.monthrange(now.year,now.month)[1])
-    end = end - datetime.timedelta(days=(end.weekday() + 1) % 7)
-    logger.info(f"Retrieving Ninja activities for {now}. Start: {start}, End: {end}")
-
-    weeks = [{"start": day, "end": day + datetime.timedelta(days=6)} for day in workdays(start, end, [1,2,3,4,5,6])]
-
-    with db_driver.session() as session:
-        params = {"year": now.year, "month": now.month }
-        result = session.run(q.ninjas_api_discourse_query, params)
-
-        discourse_rows = [row.data() for row in result]
-
-        params = {"now": now.strftime("%Y-%m")}
-        result = session.run(q.ninjas_api_so_query, params)
-
-        so_rows = [row.data() for row in result]
-
-    return {"statusCode": 200, "body": json.dumps({
-        "discourse": discourse_rows,
-        "so": so_rows,
-        "weeks": [{"start": week["start"].strftime("%Y-%m-%d"),
-                   "end": week["end"].strftime("%Y-%m-%d")}
-                  for week in weeks]
-    }), "headers": {
-        "Content-Type": "application/json",
-        'Access-Control-Allow-Origin': '*'
-    }}
-
-
 def assign_badges(event, context):
     sns = boto3.client('sns')
     topic_arn = construct_topic_arn(context, STORE_BADGES_TOPIC)

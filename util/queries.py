@@ -103,6 +103,8 @@ return currentMonth, user, collect([week,total,accepted]) as weekly
 ninjas_api_discourse_query = """\
 MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
 WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
+AND post.number > 1
+// AND not((u)-[:POSTED_CONTENT]->(:DiscoursePost {number: 1})-[:PART_OF]->(topic))
 with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
 ORDER BY week, total DESC

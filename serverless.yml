@@ -156,7 +156,7 @@ functions:
         - schedule: rate(5 minutes)
   ninja-all:
     name: Discourse-API-AllNinjas
-    handler: handler.api_all_ninjas
+    handler: api.all_ninjas
     events:
       - http: GET AllNinjas
   badges:
