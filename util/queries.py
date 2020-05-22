@@ -104,9 +104,9 @@ ninjas_api_discourse_query = """\
 MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
 WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
 AND post.number > 1
-// AND not((u)-[:POSTED_CONTENT]->(:DiscoursePost {number: 1})-[:PART_OF]->(topic))
+AND not((u)-[:POSTED_CONTENT]->(:DiscoursePost {number: 1})-[:PART_OF]->(topic))
 with *, post.createdAt.week as week
-with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
+with week, u, count(*) as total, collect(DISTINCT {name: category.name, id: category.id}) AS categories
 ORDER BY week, total DESC
 WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
 WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | u][0] AS discourseUser, weekly, categories

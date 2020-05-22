@@ -212,7 +212,9 @@ functions:
     handler: handler.poll_ninja_requests
     events:
       - schedule: rate(1 hour)
-
+  poll-ninja-recommended-questions:
+    name: Discourse-PollNinjaRecommendedQuestions
+    handler: handler.poll_ninja_recommended_questions
 
 package:
   exclude:
