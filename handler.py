@@ -717,46 +717,59 @@ def send_private_message(headers, payload):
 def poll_ninja_recommended_questions(event, context):
     headers = {'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user}
 
-    users = ["mark.needham"]
+    now = datetime.datetime.now()
+    week_starting = (now - datetime.timedelta(days=(now.weekday() + 1) % 7)).date()
+
+    users = ["mark.needham", "llpree", "elena.kohlwey", "tony.chiboucas", "intouch.vivek"]
     with db_driver.session() as session:
         result = session.run("""
         MATCH (u:DiscourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})
         WHERE u.name IN $users
         RETURN u {.name, .id, .screenName} AS u
-        LIMIT 10
+        LIMIT 1
         """, {"users": users})
 
         for row in result:
             name = row["u"].get('screenName')
             username = row["u"].get('name')
-            logger.info(f"User: {name}")
             recommendations = session.run("""
-            MATCH (u:DiscourseUser {name: $userName})-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-            WITH category, count(*) AS count
+            MATCH (me:DiscourseUser {name: $userName})
+            WHERE not((me)<-[:SUGGESTED_FOR]-(:DiscourseRecommendations {week: $weekStarting}))
+            MATCH (me)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
+            WITH me, category, count(*) AS count
             ORDER BY count DESC
             LIMIT 5
-            WITH collect(category) AS categories
+            WITH me, collect(category) AS categories
             
             MATCH (u:DiscourseUser)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
-            WITH topic, count(*) AS count, categories
+            WITH me, topic, count(*) AS count, categories
             WHERE count = 1 
             AND exists((topic)-[:IN_CATEGORY]->()) 
             AND topic.createdAt > datetime() - duration({days: 7})
+            AND not((topic)-[:PART_OF]->(:DiscourseRecommendations)-[:SUGGESTED_FOR]->(me))
             MATCH (topic)-[:IN_CATEGORY]->(c)
             WHERE c in categories
-            WITH topic, collect(c.name) AS categories
+            WITH me, topic, collect(c.name) AS categories
             ORDER BY rand()
             LIMIT 3
+            
+            MERGE (recommendations: DiscourseRecommendations {week: $weekStarting, user: me.id})
+            SET recommendations.sent = datetime()
+            MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
+            MERGE (topic)-[:PART_OF]->(recommendations)
+            
             RETURN topic.title AS title, 
                    "https://community.neo4j.com/t/" + topic.id AS link, 
                    categories,
                    topic.createdAt AS createdAt
             ORDER BY topic.createdAt DESC
-            """, {"userName": username})
+            """, {"userName": username, "weekStarting": week_starting})
 
-            print("username:", username)
-            send_private_message(headers, {
-                "raw": n.ninja_questions(name, username, recommendations),
-                "target_usernames": username,
-                "title": f"Neo4j Ninja questions to answer: {datetime.datetime.now().strftime('%d %B %Y')}"
-            })
+            has_recommendations = recommendations.peek()
+            logger.info(f"User: {username}, Has recommendations? {has_recommendations}")
+            if has_recommendations:
+                send_private_message(headers, {
+                    "raw": n.ninja_questions(name, username, recommendations),
+                    "target_usernames": username,
+                    "title": f"Neo4j Ninja questions to answer: {datetime.datetime.now().strftime('%d %B %Y')}"
+                })

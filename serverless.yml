@@ -215,6 +215,9 @@ functions:
   poll-ninja-recommended-questions:
     name: Discourse-PollNinjaRecommendedQuestions
     handler: handler.poll_ninja_recommended_questions
+    events:
+      - schedule: cron(0 9 * * ? *)
+      - schedule: cron(0 18 * * ? *)
 
 package:
   exclude:

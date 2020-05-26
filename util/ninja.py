@@ -58,9 +58,11 @@ def ninja_questions(name, username, recommendations):
 Dear {name or username}, 
 
 It's time to answer some community site questions to make sure you keep getting your Ninja rewards.
-Below are some questions that I think you can help out with:
+I think you can help out with the questions below:
 
 {reco}
+
+And don't forget that you can always track your progress on the [Neo4j Ninjas Leaderboard](http://ninjas.neo4j.com.s3-website-us-east-1.amazonaws.com/)
 
 Happy ninja'ing,
 Greta the Graph Giraffe"""
