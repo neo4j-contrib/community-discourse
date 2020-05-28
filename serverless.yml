@@ -218,6 +218,9 @@ functions:
     events:
       - schedule: cron(0 9 * * ? *)
       - schedule: cron(0 18 * * ? *)
+  clean-up-discourse-users:
+    name: Discourse-CleanUpDiscourseUsers
+    handler: handler.clean_up_discourse_users
 
 package:
   exclude:

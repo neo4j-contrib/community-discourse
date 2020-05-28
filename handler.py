@@ -721,30 +721,35 @@ def poll_ninja_recommended_questions(event, context):
     week_starting = (now - datetime.timedelta(days=(now.weekday() + 1) % 7)).date()
 
     users = ["mark.needham", "llpree", "elena.kohlwey", "tony.chiboucas", "intouch.vivek"]
+    # users = ["mark.needham"]
     with db_driver.session() as session:
+        params = {"users": users, "weekStarting": week_starting}
+        logger.info(f"Params: {params}")
         result = session.run("""
-        MATCH (u:DiscourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})
-        WHERE u.name IN $users
-        RETURN u {.name, .id, .screenName} AS u
+        MATCH (me:DiscourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})
+        WHERE me.name IN $users
+        AND not((me)<-[:SUGGESTED_FOR]-(:DiscourseRecommendations {week: $weekStarting}))
+        RETURN me {.name, .id, .screenName} AS u
         LIMIT 1
-        """, {"users": users})
+        """, params)
+        logger.info(f"User to process: {result.peek()}")
 
         for row in result:
             name = row["u"].get('screenName')
             username = row["u"].get('name')
+            user_id = row["u"].get('id')
             recommendations = session.run("""
-            MATCH (me:DiscourseUser {name: $userName})
-            WHERE not((me)<-[:SUGGESTED_FOR]-(:DiscourseRecommendations {week: $weekStarting}))
+            MATCH (me:DiscourseUser {id: $userId})
             MATCH (me)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
             WITH me, category, count(*) AS count
             ORDER BY count DESC
             LIMIT 5
             WITH me, collect(category) AS categories
-            
+
             MATCH (u:DiscourseUser)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
             WITH me, topic, count(*) AS count, categories
-            WHERE count = 1 
-            AND exists((topic)-[:IN_CATEGORY]->()) 
+            WHERE count = 1
+            AND exists((topic)-[:IN_CATEGORY]->())
             AND topic.createdAt > datetime() - duration({days: 7})
             AND not((topic)-[:PART_OF]->(:DiscourseRecommendations)-[:SUGGESTED_FOR]->(me))
             MATCH (topic)-[:IN_CATEGORY]->(c)
@@ -752,18 +757,18 @@ def poll_ninja_recommended_questions(event, context):
             WITH me, topic, collect(c.name) AS categories
             ORDER BY rand()
             LIMIT 3
-            
+
             MERGE (recommendations: DiscourseRecommendations {week: $weekStarting, user: me.id})
             SET recommendations.sent = datetime()
             MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
             MERGE (topic)-[:PART_OF]->(recommendations)
-            
-            RETURN topic.title AS title, 
-                   "https://community.neo4j.com/t/" + topic.id AS link, 
+
+            RETURN topic.title AS title,
+                   "https://community.neo4j.com/t/" + topic.id AS link,
                    categories,
                    topic.createdAt AS createdAt
             ORDER BY topic.createdAt DESC
-            """, {"userName": username, "weekStarting": week_starting})
+            """, {"userId": user_id, "weekStarting": week_starting})
 
             has_recommendations = recommendations.peek()
             logger.info(f"User: {username}, Has recommendations? {has_recommendations}")
@@ -773,3 +778,51 @@ def poll_ninja_recommended_questions(event, context):
                     "target_usernames": username,
                     "title": f"Neo4j Ninja questions to answer: {datetime.datetime.now().strftime('%d %B %Y')}"
                 })
+
+
+def duplicate_users_query(tx):
+    query = """
+    MATCH (me:DiscourseUser)
+    WITH me.name AS name, count(*) AS count, collect(me.id) AS ids
+    WHERE count > 1
+    UNWIND ids AS id
+    RETURN id
+    LIMIT 5
+    """
+    return tx.run(query)
+
+
+def deprecate_missing_user(tx, user_id):
+    query = """
+    MATCH (u:DiscourseUser {id: $userId})
+    REMOVE u:DiscourseUser
+    SET u:MissingDiscourseUser
+    """
+    return tx.run(query, userId=user_id)
+
+
+def update_user_screenname(tx, user_id, json):
+    query = """
+    MATCH (u:DiscourseUser {id: $userId})
+    SET u.name = $json.username
+    """
+    return tx.run(query, userId=user_id, json=json)
+
+
+def clean_up_discourse_users(event, context):
+    headers = {'Content-Type': 'application/json', 'Api-Key': discourse_api_key, 'Api-Username': discourse_api_user}
+
+    with db_driver.session() as session:
+        result = session.read_transaction(duplicate_users_query)
+        for row in result:
+            id = row["id"]
+            r = requests.get(f"https://community.neo4j.com/admin/users/{id}.json", headers=headers)
+            status_code = r.status_code
+            json = r.json()
+            print(row, status_code, json)
+            if status_code == 404:
+                result = session.write_transaction(deprecate_missing_user, id)
+                logger.info(f"result: {result.summary().counters}")
+            if status_code == 200:
+                result = session.write_transaction(update_user_screenname, id, json)
+                logger.info(f"result: {result.summary().counters}")
