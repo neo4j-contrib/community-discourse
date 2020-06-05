@@ -217,7 +217,9 @@ functions:
     handler: handler.poll_ninja_recommended_questions
     events:
       - schedule: cron(0 9 * * ? *)
+      - schedule: cron(0 12 * * ? *)
       - schedule: cron(0 18 * * ? *)
+      - schedule: cron(0 23 * * ? *)
   clean-up-discourse-users:
     name: Discourse-CleanUpDiscourseUsers
     handler: handler.clean_up_discourse_users
