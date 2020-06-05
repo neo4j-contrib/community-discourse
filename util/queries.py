@@ -315,3 +315,69 @@ import_twin4j_query = """\
     CALL apoc.do.when(u is NOT NULL, 'MERGE (twin4j)-[:FEATURED]->(u)', '', {twin4j: twin4j, u: u}) YIELD value
     RETURN value
     """
+
+find_ninja_to_process = """
+MATCH (me:DiscourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})
+WHERE not((me)<-[:SUGGESTED_FOR]-(:DiscourseRecommendations {week: $weekStarting}))
+RETURN me {.name, .id, .screenName} AS u
+LIMIT $limit
+"""
+
+find_topics_to_recommend = """
+MATCH (me:DiscourseUser {id: $userId})
+MATCH (me)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
+WITH me, category, count(*) AS count
+ORDER BY count DESC
+LIMIT 5
+WITH me, collect(category) AS categories
+
+MATCH (u:DiscourseUser)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
+WITH me, topic, count(*) AS count, categories
+WHERE count = 1
+AND exists((topic)-[:IN_CATEGORY]->())
+AND topic.createdAt > datetime() - duration({days: 7})
+AND not((topic)-[:PART_OF]->(:DiscourseRecommendations)-[:SUGGESTED_FOR]->(me))
+MATCH (topic)-[:IN_CATEGORY]->(c)
+WHERE c in categories
+WITH me, topic, collect(c.name) AS categories
+ORDER BY rand()
+LIMIT 3
+
+RETURN topic.title AS title,
+"https://community.neo4j.com/t/" + topic.id AS link,
+categories,
+topic.createdAt AS createdAt,
+topic.id AS topicId
+ORDER BY topic.createdAt DESC
+
+UNION ALL
+
+MATCH (me:DiscourseUser {id: $userId})
+
+MATCH (u:DiscourseUser)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
+WITH me, topic, count(*) AS count
+WHERE count = 1
+AND exists((topic)-[:IN_CATEGORY]->())
+AND topic.createdAt > datetime() - duration({days: 7})
+AND not((topic)-[:PART_OF]->(:DiscourseRecommendations)-[:SUGGESTED_FOR]->(me))
+MATCH (topic)-[:IN_CATEGORY]->(c)
+WITH me, topic, collect(c.name) AS categories
+ORDER BY rand()
+
+RETURN topic.title AS title,
+"https://community.neo4j.com/t/" + topic.id AS link,
+categories,
+topic.createdAt AS createdAt,
+topic.id AS topicId
+ORDER BY topic.createdAt DESC
+"""
+
+save_recommendations_query = """
+MERGE (recommendations: DiscourseRecommendations {week: $weekStarting, user: $userId})
+SET recommendations.sent = datetime()
+MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
+WITH recommendations
+UNWIND $topics AS topicId
+MATCH (topic:DiscourseTopic {id: topicId}) 
+MERGE (topic)-[:PART_OF]->(recommendations)
+"""

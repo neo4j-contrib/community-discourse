@@ -1,25 +1,19 @@
-import calendar
 import datetime
 import json
-import re
 import logging
+import re
 
 import boto3
 import feedparser
 import flask
 import requests
 from bs4 import BeautifulSoup
-from jinja2 import Template
 from neo4j import GraphDatabase
 from requests_toolbelt import MultipartEncoder
 from retrying import retry
-from dateutil import parser
-import hashlib
-import hmac
-import timeago
 
-import util.queries as q
 import util.ninja as n
+import util.queries as q
 
 ASSIGN_BADGES_TOPIC = "Discourse-Badges"
 STORE_BADGES_TOPIC = "Store-Discourse-Badges"
@@ -42,14 +36,14 @@ def construct_topic_arn(context, topic):
 
 
 def get_ssm_param(key):
-  resp = ssmc.get_parameter(
-    Name=key,
-    WithDecryption=True
-  )
-  return resp['Parameter']['Value']
+    resp = ssmc.get_parameter(
+        Name=key,
+        WithDecryption=True
+    )
+    return resp['Parameter']['Value']
 
 
-ssmc = boto3.client('ssm')
+ssmc = boto3.client('ssm', region_name="us-east-1")
 app = flask.Flask('feedback form')
 discourse_blog_category_id = 122
 
@@ -57,7 +51,7 @@ host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
 user = get_ssm_param('com.neo4j.graphacademy.dbuser')
 password = get_ssm_param('com.neo4j.graphacademy.dbpassword')
 
-db_driver = GraphDatabase.driver("bolt+routing://%s" % (host_port), auth=(user, password), max_retry_time=15)
+db_driver = GraphDatabase.driver(f"bolt+routing://{host_port}", auth=(user, password), max_retry_time=15)
 
 discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
 discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')
@@ -720,57 +714,30 @@ def poll_ninja_recommended_questions(event, context):
     now = datetime.datetime.now()
     week_starting = (now - datetime.timedelta(days=(now.weekday() + 1) % 7)).date()
 
-    users = ["mark.needham", "llpree", "elena.kohlwey", "tony.chiboucas", "intouch.vivek"]
-    # users = ["mark.needham"]
     with db_driver.session() as session:
-        params = {"users": users, "weekStarting": week_starting}
+        params = {"weekStarting": week_starting, "limit": 1}
         logger.info(f"Params: {params}")
-        result = session.run("""
-        MATCH (me:DiscourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})
-        WHERE me.name IN $users
-        AND not((me)<-[:SUGGESTED_FOR]-(:DiscourseRecommendations {week: $weekStarting}))
-        RETURN me {.name, .id, .screenName} AS u
-        LIMIT 1
-        """, params)
-        logger.info(f"User to process: {result.peek()}")
+        result = session.read_transaction(lambda tx: tx.run(q.find_ninja_to_process, params).data())
+        logger.info(f"User to process: {result}")
 
         for row in result:
             name = row["u"].get('screenName')
             username = row["u"].get('name')
             user_id = row["u"].get('id')
-            recommendations = session.run("""
-            MATCH (me:DiscourseUser {id: $userId})
-            MATCH (me)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-            WITH me, category, count(*) AS count
-            ORDER BY count DESC
-            LIMIT 5
-            WITH me, collect(category) AS categories
 
-            MATCH (u:DiscourseUser)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
-            WITH me, topic, count(*) AS count, categories
-            WHERE count = 1
-            AND exists((topic)-[:IN_CATEGORY]->())
-            AND topic.createdAt > datetime() - duration({days: 7})
-            AND not((topic)-[:PART_OF]->(:DiscourseRecommendations)-[:SUGGESTED_FOR]->(me))
-            MATCH (topic)-[:IN_CATEGORY]->(c)
-            WHERE c in categories
-            WITH me, topic, collect(c.name) AS categories
-            ORDER BY rand()
-            LIMIT 3
+            params = {"userId": user_id}
+            recommendations = session.read_transaction(
+                lambda tx: tx.run(q.find_topics_to_recommend, params).data())[:3]
 
-            MERGE (recommendations: DiscourseRecommendations {week: $weekStarting, user: me.id})
-            SET recommendations.sent = datetime()
-            MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
-            MERGE (topic)-[:PART_OF]->(recommendations)
+            params = {
+                "userId": user_id,
+                "weekStarting": week_starting,
+                "topics": [r["topicId"] for r in recommendations]
+            }
+            response = session.write_transaction(lambda tx: tx.run(q.save_recommendations_query, params).summary().counters)
+            logger.info(f"Stored recommendations for {params}: {response}")
 
-            RETURN topic.title AS title,
-                   "https://community.neo4j.com/t/" + topic.id AS link,
-                   categories,
-                   topic.createdAt AS createdAt
-            ORDER BY topic.createdAt DESC
-            """, {"userId": user_id, "weekStarting": week_starting})
-
-            has_recommendations = recommendations.peek()
+            has_recommendations = len(recommendations) > 0
             logger.info(f"User: {username}, Has recommendations? {has_recommendations}")
             if has_recommendations:
                 send_private_message(headers, {
