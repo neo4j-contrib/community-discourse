@@ -373,6 +373,7 @@ ORDER BY topic.createdAt DESC
 """
 
 save_recommendations_query = """
+MATCH (me:DiscourseUser {id: $userId})
 MERGE (recommendations: DiscourseRecommendations {week: $weekStarting, user: $userId})
 SET recommendations.sent = datetime()
 MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
