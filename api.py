@@ -56,6 +56,7 @@ def all_ninjas(event, context):
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month}
+        print("params", params)
         result = session.run(q.ninjas_api_discourse_query, params)
 
         discourse_rows = [row.data() for row in result]

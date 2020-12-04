@@ -10,10 +10,10 @@ MERGE (discourseUser)-[:HAS_BADGE]->(discourseBadge)
 
 users_badge_refresh_query = """
 MATCH (account:DiscourseUser)
-WITH account { 
-    .id, 
-    .name, 
-    lastRefresh: coalesce(account.lastBadgeRefresh, datetime() - duration("PT24H1M")) 
+WITH account {
+    .id,
+    .name,
+    lastRefresh: coalesce(account.lastBadgeRefresh, datetime() - duration("PT24H1M"))
 }
 WHERE account.lastRefresh < datetime() - duration("PT24H")
 RETURN account.id AS discourseId, account.name AS userName
@@ -33,10 +33,10 @@ MERGE (discourseUser)-[:IN_GROUP]->(discourseGroup)
 
 users_groups_refresh_query = """
 MATCH (account:DiscourseUser)
-WITH account { 
-    .id, 
-    .name, 
-    lastRefresh: coalesce(account.lastGroupRefresh, datetime() - duration("PT24H1M")) 
+WITH account {
+    .id,
+    .name,
+    lastRefresh: coalesce(account.lastGroupRefresh, datetime() - duration("PT24H1M"))
 }
 WHERE account.lastRefresh < datetime() - duration("PT24H")
 RETURN account.id AS discourseId, account.name AS userName
@@ -49,9 +49,9 @@ MATCH (user:User)-[:TOOK]->(exam)
 WHERE exists(exam.certificatePath) AND exam.passed
 MATCH (user)-[:DISCOURSE_ACCOUNT]->(account)
 WHERE not((account)-[:HAS_BADGE]->(:DiscourseBadge {id: 103}))
-RETURN DISTINCT user.auth0_key AS externalId, 
-       account.name AS userName, 
-       account.id AS discourseId, 
+RETURN DISTINCT user.auth0_key AS externalId,
+       account.name AS userName,
+       account.id AS discourseId,
        [(account)-[:HAS_BADGE]->(badge) | badge.name] AS badges
 ORDER BY size(badges) DESC
 LIMIT 100
@@ -62,9 +62,9 @@ MATCH (user:User)-[:TOOK]->(exam)
 WHERE exists(exam.certificatePath) AND exam.passed
 MATCH (user)-[:DISCOURSE_ACCOUNT]->(account)
 WHERE not((account)-[:IN_GROUP]->(:DiscourseGroup {id: 41}))
-RETURN DISTINCT user.auth0_key AS externalId, 
-       account.name AS userName, 
-       account.id AS discourseId, 
+RETURN DISTINCT user.auth0_key AS externalId,
+       account.name AS userName,
+       account.id AS discourseId,
        [(account)-[:IN_GROUP]->(group) | group.name] AS groups,
        [(account)-[:HAS_BADGE]->(badge) | badge.name] AS badges
 ORDER BY size(groups) DESC
@@ -102,7 +102,7 @@ return currentMonth, user, collect([week,total,accepted]) as weekly
 
 ninjas_api_discourse_query = """\
 MATCH path = (u)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)-[:IN_CATEGORY]->(category)
-WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:$year, month:$month })
+WHERE post.createdAt.year = $year AND post.createdAt.month = $month
 AND post.number > 1
 AND not((u)-[:POSTED_CONTENT]->(:DiscoursePost {number: 1})-[:PART_OF]->(topic))
 with *, post.createdAt.week as week
@@ -110,11 +110,11 @@ with week, u, count(*) as total, collect(DISTINCT {name: category.name, id: cate
 ORDER BY week, total DESC
 WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
 WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | u][0] AS discourseUser, weekly, categories
-WITH u.name AS user, discourseUser.screenName AS discourseUser, 
+WITH u.name AS user, discourseUser.screenName AS discourseUser,
      exists((discourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})) AS isNinja,
      apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
      apoc.coll.toSet(apoc.coll.flatten(collect(categories))) AS categories
-RETURN user, discourseUser, weekly, categories, isNinja       
+RETURN user, discourseUser, weekly, categories, isNinja
 ORDER BY size(keys(weekly)) DESC
 """
 
@@ -379,6 +379,17 @@ SET recommendations.sent = datetime()
 MERGE (recommendations)-[:SUGGESTED_FOR]->(me)
 WITH recommendations
 UNWIND $topics AS topicId
-MATCH (topic:DiscourseTopic {id: topicId}) 
+MATCH (topic:DiscourseTopic {id: topicId})
 MERGE (topic)-[:PART_OF]->(recommendations)
+"""
+
+answered_recommendations_query = """
+MATCH (topic:DiscourseTopic)-[:PART_OF]->(rec)-[:SUGGESTED_FOR]->(user)
+WITH topic, collect(user.name) AS users
+OPTIONAL MATCH (answerer)-[:POSTED_CONTENT]->(post:DiscoursePost)-[:PART_OF]->(topic)
+WHERE post.number > 1
+WITH topic, users, collect(DISTINCT answerer.name) AS answerers
+ORDER BY topic.createdAt DESC
+return topic.title, toString(topic.createdAt),  users, answerers, size(apoc.coll.intersection(users, answerers)) > 0,
+       "https://community.neo4j.com/t/" + topic.id AS link
 """
