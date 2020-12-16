@@ -30,3 +30,4 @@ soupsieve==2.0
 timeago==1.0.14
 urllib3==1.25.8
 Werkzeug==1.0.1
+pipenv==2020.11.15
