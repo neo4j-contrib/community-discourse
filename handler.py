@@ -51,7 +51,7 @@ host_port = get_ssm_param('com.neo4j.graphacademy.dbhostport')
 user = get_ssm_param('com.neo4j.graphacademy.dbuser')
 password = get_ssm_param('com.neo4j.graphacademy.dbpassword')
 
-db_driver = GraphDatabase.driver(f"bolt+routing://{host_port}", auth=(user, password), max_retry_time=15)
+db_driver = GraphDatabase.driver(f"neo4j://{host_port}", auth=(user, password), max_retry_time=15)
 
 discourse_api_key =  get_ssm_param('com.neo4j.devrel.discourse.apikey')
 discourse_api_user =  get_ssm_param('com.neo4j.devrel.discourse.apiusername')

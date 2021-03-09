@@ -1,6 +1,6 @@
 service: discourse
 
-frameworkVersion: ">=1.2.0 <2.0.0"
+#frameworkVersion: ">=1.2.0 <2.0.0"
 
 custom:
   stage: "${opt:stage, self:provider.stage}"
@@ -99,18 +99,24 @@ functions:
       handler: handler.community_content
       timeout: 30
       events:
-        - http: POST CommunityContent
+        - http: 
+            method: POST
+            path:  CommunityContent
   import-posts-topics:
       name: Discourse-ImportPostsTopics
       handler: handler.import_posts_topics
       events:
-        - http: POST ImportPostsTopics
+        - http:
+            method: POST
+            path:  ImportPostsTopics
   user-events:
       name: Discourse-UserEventsWebHook
       handler: handler.user_events
       timeout: 30
       events:
-        - http: POST UserEvents
+        - http: 
+            method: POST
+            path: UserEvents
   assign-edu-group:
       name: Discourse-AssignEduGroup
       handler: handler.assign_edu_group
@@ -133,7 +139,9 @@ functions:
       handler: handler.update_profile
       timeout: 30
       events:
-        - http: POST UpdateProfile
+        - http: 
+            method: POST
+            path: UpdateProfile
   update-topics:
       name: Discourse-UpdateTopics
       handler: handler.update_topics
@@ -158,7 +166,9 @@ functions:
     name: Discourse-API-AllNinjas
     handler: api.all_ninjas
     events:
-      - http: GET AllNinjas
+      - http: 
+          method: GET
+          path: AllNinjas
   badges:
     name: Discourse-AssignBadges
     handler: handler.assign_badges
