@@ -108,7 +108,7 @@ AND not((u)-[:POSTED_CONTENT]->(:DiscoursePost {number: 1})-[:PART_OF]->(topic))
 with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT {name: category.name, id: category.id}) AS categories
 ORDER BY week, total DESC
-WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
+WITH u, collect([toString(date(toString($year - (week / 52)) + "-W" + toString(week))), total]) as weekly, categories
 WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | u][0] AS discourseUser, weekly, categories
 WITH u.name AS user, discourseUser.screenName AS discourseUser,
      exists((discourseUser)-[:IN_GROUP]->(:DiscourseGroup {id: 50})) AS isNinja,
@@ -136,7 +136,7 @@ WHERE datetime({year:$year, month:$month+1}) > post.createdAt >= datetime({year:
 with *, post.createdAt.week as week
 with week, u, count(*) as total, collect(DISTINCT category.name) AS categories
 ORDER BY week, total DESC
-WITH u, collect([toString(date(datetime({epochMillis: apoc.date.parse($year + " " + week, "ms", "YYYY w")}))), total]) as weekly, categories
+WITH u, collect([toString(date(toString($year - (week / 52)) + "-W" + toString(week))), total]) as weekly, categories
 WITH u, [(u)<-[:DISCOURSE_ACCOUNT]-(user) WHERE exists(user.auth0_key) | user.email][0] AS email, weekly, categories
 RETURN u.name AS user, email,
        apoc.map.fromPairs(apoc.coll.toSet(apoc.coll.flatten(collect(weekly)))) AS weekly,
