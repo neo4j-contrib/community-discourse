@@ -92,6 +92,7 @@ provider:
 
 plugins:
   - serverless-python-requirements
+  - serverless-offline
 
 functions:
   community-content:
