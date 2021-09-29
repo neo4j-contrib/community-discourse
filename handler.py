@@ -677,12 +677,12 @@ def poll_ninja_requests(event, context):
 
                 send_private_message(headers, {
                     "raw": n.ninja_acceptance_message(name, username),
-                    "target_usernames": username,
+                    "target_recipients": username,
                     "title": f"Neo4j Ninja Group Request Accepted"
                 })
                 send_private_message(headers, {
                     "raw": n.ninja_approval_owner_message(name, username),
-                    "target_usernames": mother_of_ninjas,
+                    "target_recipients": mother_of_ninjas,
                     "title": f"Neo4j Ninja Approved: {name or username}"
                 })
             else:
@@ -695,7 +695,7 @@ def poll_ninja_requests(event, context):
 
                 send_private_message(headers, {
                     "raw": n.ninja_rejection_owner_message(name, username),
-                    "target_usernames": mother_of_ninjas,
+                    "target_recipients": mother_of_ninjas,
                     "title": f"Neo4j Ninja Rejected: {name or username}"
                 })
 
@@ -742,7 +742,7 @@ def poll_ninja_recommended_questions(event, context):
             if has_recommendations:
                 send_private_message(headers, {
                     "raw": n.ninja_questions(name, username, recommendations),
-                    "target_usernames": username,
+                    "target_recipients": username,
                     "title": f"Neo4j Ninja questions to answer: {datetime.datetime.now().strftime('%d %B %Y')}"
                 })
 
