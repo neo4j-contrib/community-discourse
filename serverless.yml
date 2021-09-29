@@ -43,6 +43,8 @@ custom:
         - Ref: AWS::Region
         - Ref: AWS::AccountId
         - Store-Discourse-Groups
+  serverless-offline:
+    httpPort: 4000
 
 provider:
   name: aws
@@ -92,6 +94,7 @@ provider:
 
 plugins:
   - serverless-python-requirements
+  - serverless-offline
 
 functions:
   community-content:
