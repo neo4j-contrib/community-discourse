@@ -40,19 +40,20 @@ def workdays(d, end, excluded=(6, 7)):
 
 def all_ninjas(event, context):
     print(event)
+    print("fyneh")
     qs = event.get("multiValueQueryStringParameters")
     if qs and qs.get("date"):
         now = parser.parse(qs["date"][0]).replace(day=1)
     else:
         now = datetime.datetime.now().replace(day=1)
 
-    start = now - datetime.timedelta(days=(now.weekday() + 1) % 7)
+    start = now - datetime.timedelta(days=(now.isoweekday() + 1) % 7)
     end = now.replace(day=calendar.monthrange(now.year, now.month)[1])
-    end = end - datetime.timedelta(days=(end.weekday() + 1) % 7)
+    end = end - datetime.timedelta(days=(end.isoweekday() + 1) % 7)
     logger.info(f"Retrieving Ninja activities for {now}. Start: {start}, End: {end}")
 
     weeks = [{"start": day, "end": day + datetime.timedelta(days=6)} for day in
-             workdays(start, end, [1, 2, 3, 4, 5, 6])]
+             workdays(start, end, [2, 3, 4, 5, 6, 7])]
 
     with db_driver.session() as session:
         params = {"year": now.year, "month": now.month}
